@@ -23,36 +23,32 @@ def _parse_date_string(date_string):
     Returns datetime.min if parsing fails.
     """
     if not date_string:
-        return datetime.min # Use a minimum date for sorting if no date is available
+        return datetime.min
 
-    # Common formats to try
     formats = [
-        '%Y-%m-%dT%H:%M:%SZ',  # ISO format with Z (News API)
-        '%Y-%m-%dT%H:%M:%S%z',  # ISO format with offset
-        '%a, %d %b %Y %H:%M:%S %z', # RFC 822 with +/- offset (e.g., Wed, 10 Sep 2025 19:51:39 +0000)
-        '%a, %d %b %Y %H:%M:%S %Z', # RFC 822 with timezone name (e.g., Wed, 10 Sep 2025 19:51:39 UTC)
-        '%a, %d %b %Y %H:%M:%S', # RFC 822 without timezone (assume UTC or local if needed)
-        '%Y-%m-%d %H:%M:%S', # Common database format
-        '%Y-%m-%d', # Date only
+        '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%dT%H:%M:%S%z',
+        '%a, %d %b %Y %H:%M:%S %z',
+        '%a, %d %b %Y %H:%M:%S %Z',
+        '%a, %d %b %Y %H:%M:%S',
+        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%d',
     ]
 
-    # Clean up timezone names if present before parsing, or replace 'Z' for better parsing
     cleaned_date_string = date_string.replace('Z', '+00:00').strip()
     cleaned_date_string = re.sub(r' (UTC|GMT)$', ' +0000', cleaned_date_string, flags=re.IGNORECASE)
 
     for fmt in formats:
         try:
             dt_obj = datetime.strptime(cleaned_date_string, fmt)
-            # Ensure the datetime object has timezone info. If not, assume UTC.
             if dt_obj.tzinfo is None:
-                # Naive datetime, assume UTC for consistency with Supabase timestamp with time zone
                 return dt_obj.replace(tzinfo=datetime.timezone.utc)
             return dt_obj
         except ValueError:
-            pass # Try next format
+            pass
 
     print(f"Warning: Could not parse date string '{date_string}' with any known format.")
-    return datetime.min # Return minimum date if all attempts fail
+    return datetime.min
 
 # --- Configure Google Gemini ---
 def get_gemini_model():
@@ -68,9 +64,6 @@ def get_gemini_model():
     available_models = []
     try:
         available_models = list(genai.list_models())
-        print(f"DEBUG: Found {len(available_models)} models.")
-        for m in available_models:
-            print(f"DEBUG: Model '{m.name}' supports: {m.supported_generation_methods}")
     except Exception as e:
         print(f"Error listing Gemini models: {e}. Check API key validity and network access.")
         return None
@@ -219,9 +212,10 @@ def fetch_full_article_content(url):
     params = {
         "api_key": SCRAPINGBEE_API_KEY,
         "url": url,
-        "premium_proxy": "true", # Use a premium proxy for better success rates
-        "block_resources": "false", # Don't block CSS/JS for better page rendering
-        "wait_for_selector": "body", # Wait for the body to load
+        # Removed problematic parameters for PoC robustness
+        # "premium_proxy": "true",
+        # "block_resources": "false",
+        # "wait_for_selector": "body",
     }
 
     try:
@@ -232,11 +226,9 @@ def fetch_full_article_content(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         
         # Attempt to find the main content. This is heuristic and may need refinement
-        # Common tags for main content are <article>, <main>, <div> with specific classes
         main_content = soup.find('article') or soup.find('main') or soup.find(class_=re.compile("body|content|article", re.I))
         
         if main_content:
-            # Get text, strip script/style tags, and clean up extra whitespace
             for script_or_style in main_content(['script', 'style']):
                 script_or_style.extract()
             text = main_content.get_text(separator='\n', strip=True)
@@ -244,11 +236,13 @@ def fetch_full_article_content(url):
             return text
         else:
             print(f"Could not find main content for: {url[:50]}... Returning raw text.")
-            # Fallback to general text if main_content not found
             return soup.get_text(separator='\n', strip=True)
 
     except requests.exceptions.RequestException as e:
         print(f"Error fetching full content for {url[:50]}... with ScrapingBee: {e}")
+        # Log the full response text if there's a client error to debug ScrapingBee's specific issue
+        if response is not None:
+            print(f"ScrapingBee response text: {response.text[:500]}...")
         return None
     except Exception as e:
         print(f"Error processing full content for {url[:50]}...: {e}")
@@ -264,13 +258,10 @@ def store_articles_in_supabase(all_articles):
     articles_to_insert = []
 
     for article in unique_articles:
-        # Use our robust date parser here
         parsed_datetime = _parse_date_string(article['published_date'])
         
-        # Format for Supabase: ISO 8601 with timezone offset (e.g., 2025-09-10T19:51:39+00:00)
-        # Check if the datetime object is timezone-aware before formatting
         if parsed_datetime != datetime.min:
-            if parsed_datetime.tzinfo is None: # Naive datetime, assume UTC for Supabase
+            if parsed_datetime.tzinfo is None:
                 formatted_date = parsed_datetime.isoformat() + '+00:00'
             else:
                 formatted_date = parsed_datetime.isoformat()
@@ -283,7 +274,7 @@ def store_articles_in_supabase(all_articles):
             "title": article.get('title'),
             "url": article.get('url'),
             "description": article.get('description'),
-            "published_date": formatted_date, # Store the robustly parsed date
+            "published_date": formatted_date,
             "keywords_matched": article.get('keywords_matched', [])
         })
 
@@ -311,14 +302,12 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         print("No articles to analyze for the daily briefing.")
         return None
 
-    # Sort articles by the robustly parsed date
     sorted_articles = sorted(
         articles_for_analysis, 
-        key=lambda x: _parse_date_string(x.get('published_date')), # Use the robust parser here
+        key=lambda x: _parse_date_string(x.get('published_date')), 
         reverse=True
     )
     
-    # Limit number of articles for full content fetching and AI analysis
     MAX_ARTICLES_FOR_DEEP_ANALYSIS = 5 
     articles_for_gemini_input = []
     related_urls_for_briefing = []
@@ -329,20 +318,17 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         title = article.get('title', 'No Title')
         url = article.get('url', '#')
         description = article.get('description', 'No description available.')
-        full_content = article.get('full_content') # This will be populated if ScrapingBee succeeded
+        full_content = article.get('full_content')
 
         article_input_text = ""
         if i < MAX_ARTICLES_FOR_DEEP_ANALYSIS and full_content:
-            # Use full content for the top N articles if available
-            article_input_text = f"Title: {title}\nURL: {url}\nFull Content: {full_content[:2000]}..." # Truncate for prompt safety
+            article_input_text = f"Title: {title}\nURL: {url}\nFull Content: {full_content[:2000]}..."
         else:
-            # Otherwise, use title and description
             article_input_text = f"Title: {title}\nURL: {url}\nDescription: {description}"
         
         articles_for_gemini_input.append(f"--- Article {i+1} ---\n{article_input_text}\n")
         related_urls_for_briefing.append(url)
 
-    # Construct the persona and task for Gemini
     persona = (
         "You are a senior political analyst for 'New Economy Canada'. "
         "Your raison d’etre is to ramp up awareness of and support for solutions "
