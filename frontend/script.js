@@ -1,13 +1,19 @@
 // script.js
 
 // Initialize Supabase client with your project details
+// IMPORTANT: For a production application, these keys should ideally be loaded
+// from environment variables via a build step (e.g., using a framework like Next.js).
+// For this static HTML/JS PoC, directly embedding the public anon key is common,
+// but be aware of the security implications for highly sensitive data in a public repo.
 const SUPABASE_URL = "https://zdcliufkeprmrkxmqifr.supabase.co"; // YOUR_SUPABASE_URL
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpkY2xpdWZrZXBybXJreG1xaWZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU2Njg0OTEsImV4cCI6MjA3MTI0NDQ5MX0.M8I8qk-oh8H3tZ8-KWHXfoN_p5jhdfRq-4j0OEbiO_s"; // YOUR_SUPABASE_ANON_KEY
 
-const supabase = Supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// --- THIS LINE HAS BEEN CORRECTED ---
+const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); // Changed Supabase to supabase (lowercase)
+
 
 const newsContainer = document.getElementById('news-container');
-const briefingContainer = document.getElementById('briefing-content'); // New
+const briefingContainer = document.getElementById('briefing-content');
 const sortOrderSelect = document.getElementById('sortOrder');
 
 async function fetchDailyBriefing() {
