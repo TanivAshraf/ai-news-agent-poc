@@ -25,8 +25,16 @@ def get_gemini_model():
 
     genai.configure(api_key=GEMINI_API_KEY)
     
-    available_models = list(genai.list_models())
-    
+    available_models = []
+    try:
+        available_models = list(genai.list_models())
+        print(f"DEBUG: Found {len(available_models)} models.") # Debug print added back correctly
+        for m in available_models:
+            print(f"DEBUG: Model '{m.name}' supports: {m.supported_generation_methods}")
+    except Exception as e:
+        print(f"Error listing Gemini models: {e}. Check API key validity and network access.")
+        return None
+
     # Priority 1: Try 'gemini-pro'
     for m in available_models:
         if m.name == 'gemini-pro' and 'generateContent' in m.supported_generation_methods:
@@ -35,7 +43,7 @@ def get_gemini_model():
             
     # Priority 2: Fallback to 'gemini-1.5-pro' if 'gemini-pro' isn't available or suitable
     for m in available_models:
-        if m.name == 'gemini-1.5-pro' and 'generateContent' in m.supported_generation_methods: # Note: 'gemini-1.5-pro-latest' often resolves to 'gemini-1.5-pro'
+        if m.name == 'gemini-1.5-pro' and 'generateContent' in m.supported_generation_methods:
             print("Found suitable Gemini model: models/gemini-1.5-pro (fallback).")
             return genai.GenerativeModel('gemini-1.5-pro')
 
@@ -43,10 +51,6 @@ def get_gemini_model():
     return None
 
 model = get_gemini_model() # Initialize the model dynamically
-
-print(f"DEBUG: Found {len(available_models)} models.")
-for m in available_models:
-    print(f"DEBUG: Model '{m.name}' supports: {m.supported_generation_methods}")
 
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -247,7 +251,7 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         "- [Implication 2]\n\n"
         "**Suggested Reactions:** (Based on the news, recommend positive or concerned tones)\n"
         "- **Positive:** [If supportive public policy, funding, etc., suggest an action/stance]\n"
-        "- **Concerned:** [If harmful public policy, 'greenwashing', etc., suggest an action/stance]\n\n"
+        "- **Concerned:** [If harmful public policy, 'greenwashing', etc., suggest an router_action/stance]\n\n"
         "**Relevant Article URLs:**\n"
         "- [Link 1: Brief description]\n"
         "- [Link 2: Brief description]\n"
