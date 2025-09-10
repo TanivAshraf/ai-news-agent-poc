@@ -306,7 +306,7 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         reverse=True
     )
     
-    MAX_ARTICLES_FOR_DEEP_ANALYSIS = 3 # Reduced for free tier efficiency
+    MAX_ARTICLES_FOR_DEEP_ANALYSIS = 3 
     articles_for_gemini_input = []
     related_urls_for_briefing = []
 
@@ -327,6 +327,8 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         articles_for_gemini_input.append(f"--- Article {i+1} ---\n{article_input_text}\n")
         related_urls_for_briefing.append(url)
 
+    current_date_str = date.today().strftime('%B %d, %Y') # e.g., "September 10, 2025"
+
     persona = (
         "You are a senior political analyst for 'New Economy Canada'. "
         "Your raison d’etre is to ramp up awareness of and support for solutions "
@@ -337,12 +339,12 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
     )
 
     task_instruction = (
-        "Based on the following news articles, generate a 'Morning Briefing' for today. "
+        f"Based on the following news articles, generate a 'Morning Briefing' for **{current_date_str}**. "
         "Some articles may include 'Full Content' for deeper analysis. "
         "Your output should be structured to help 'New Economy Canada' monitor, observe, and react to news, "
         "and understand the narrative being shaped. "
         "Prioritize quality and focus. Here's the structure I need:\n\n"
-        "**Briefing Title:** AI Morning Briefing - [Today's Date]\n\n"
+        f"**Briefing Title:** AI Morning Briefing - {current_date_str}\n\n"
         "**Executive Summary:** A concise overview of the most critical developments (2-3 sentences).\n\n"
         "**Key Developments:**\n"
         "- [Bullet point 1: Major news item, e.g., 'Government announces X funding for Y project']\n"
@@ -387,9 +389,10 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         }
 
 def parse_gemini_briefing(briefing_text, related_urls):
-    """Parses the structured text from Gemini into a dictionary."""
+    current_date_str = date.today().strftime('%B %d, %Y') # For comparison
+
     parsed_data = {
-        "title": "AI Morning Briefing - " + date.today().strftime('%Y-%m-%d'),
+        "title": f"AI Morning Briefing - {date.today().strftime('%Y-%m-%d')}", # Default with current date
         "summary_text": "",
         "key_developments": [],
         "strategic_implications": "",
@@ -407,7 +410,12 @@ def parse_gemini_briefing(briefing_text, related_urls):
 
     title_match = re.search(sections["Briefing Title"], briefing_text, re.MULTILINE)
     if title_match:
-        parsed_data["title"] = title_match.group(1).strip()
+        extracted_title = title_match.group(1).strip()
+        # If Gemini uses its own date or placeholder, enforce current date
+        if "Today's Date" in extracted_title or "October 26, 2023" in extracted_title or "2025-09-10" in extracted_title:
+            parsed_data["title"] = f"AI Morning Briefing - {current_date_str}"
+        else:
+            parsed_data["title"] = extracted_title
     
     summary_match = re.search(sections["Executive Summary"], briefing_text, re.DOTALL | re.MULTILINE)
     if summary_match:
