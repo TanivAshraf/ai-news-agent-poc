@@ -1,50 +1,103 @@
 // script.js
 
 // Initialize Supabase client with your project details
-// IMPORTANT: For a production application, these keys should ideally be loaded
-// from environment variables via a build step (e.g., using a framework like Next.js).
-// For this static HTML/JS PoC, directly embedding the public anon key is common,
-// but be aware of the security implications for highly sensitive data in a public repo.
-const SUPABASE_URL = "https://zdcliufkeprmrkxmqifr.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpkY2xpdWZrZXBybXJreG1xaWZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU2Njg0OTEsImV4cCI6MjA3MTI0NDQ5MX0.M8I8qk-oh8H3tZ8-KWHXfoN_p5jhdfRq-4j0OEbiO_s";
+const SUPABASE_URL = "https://zdcliufkeprmrkxmqifr.supabase.co"; // YOUR_SUPABASE_URL
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpkY2xpdWZrZXBybXJreG1xaWZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU2Njg0OTEsImV4cCI6MjA3MTI0NDQ5MX0.M8I8qk-oh8H3tZ8-KWHXfoN_p5jhdfRq-4j0OEbiO_s"; // YOUR_SUPABASE_ANON_KEY
 
 const supabase = Supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const newsContainer = document.getElementById('news-container');
+const briefingContainer = document.getElementById('briefing-content'); // New
 const sortOrderSelect = document.getElementById('sortOrder');
 
-async function fetchNewsAndRender() {
-    newsContainer.innerHTML = '<p>Loading news...</p>';
+async function fetchDailyBriefing() {
+    briefingContainer.innerHTML = '<p>Loading daily briefing...</p>';
+    const today = new Date().toISOString().split('T')[0]; // Get today's date in YYYY-MM-DD format
+
+    let { data: briefing, error } = await supabase
+        .from('daily_briefings')
+        .select('*')
+        .eq('briefing_date', today) // Fetch today's briefing
+        .single(); // Expecting only one briefing per day
+
+    if (error && error.code !== 'PGRST116') { // PGRST116 means no rows found (which is fine if no briefing yet)
+        console.error('Error fetching daily briefing:', error.message);
+        briefingContainer.innerHTML = '<p>Failed to load daily briefing.</p>';
+        return;
+    }
+
+    if (briefing) {
+        renderBriefing(briefing);
+    } else {
+        briefingContainer.innerHTML = '<p>No AI briefing available for today yet. Check back later!</p>';
+    }
+}
+
+function renderBriefing(briefing) {
+    let briefingHtml = `<h3>${briefing.title || "AI Morning Briefing"}</h3>`;
+    briefingHtml += `<p><strong>Executive Summary:</strong> ${briefing.summary_text || 'No summary available.'}</p>`;
+
+    if (briefing.key_developments && briefing.key_developments.length > 0) {
+        briefingHtml += `<h3>Key Developments:</h3><ul>`;
+        briefing.key_developments.forEach(item => {
+            briefingHtml += `<li>${item}</li>`;
+        });
+        briefingHtml += `</ul>`;
+    }
+
+    if (briefing.strategic_implications) {
+        briefingHtml += `<h3>Strategic Implications for New Economy Canada:</h3><p>${briefing.strategic_implications}</p>`;
+    }
+
+    if (briefing.suggested_reactions) {
+        briefingHtml += `<h3>Suggested Reactions:</h3><p>${briefing.suggested_reactions}</p>`;
+    }
+
+    if (briefing.related_article_urls && briefing.related_article_urls.length > 0) {
+        briefingHtml += `<h3>Relevant Article URLs:</h3><ul>`;
+        briefing.related_article_urls.forEach(url => {
+            briefingHtml += `<li><a href="${url}" target="_blank">${url}</a></li>`;
+        });
+        briefingHtml += `</ul>`;
+    }
     
+    briefingContainer.innerHTML = briefingHtml;
+}
+
+
+async function fetchAndRenderAggregatedNews() {
+    newsContainer.innerHTML = '<p>Loading news articles...</p>';
     let { data: articles, error } = await supabase
         .from('articles')
-        .select('*'); // Fetch all relevant columns
+        .select('*'); 
 
     if (error) {
         console.error('Error fetching articles:', error.message);
-        newsContainer.innerHTML = '<p>Failed to load news. Please try again later.</p>';
+        newsContainer.innerHTML = '<p>Failed to load news articles. Please try again later.</p>';
         return;
     }
 
     if (articles.length === 0) {
-        newsContainer.innerHTML = '<p>No relevant news found today.</p>';
+        newsContainer.innerHTML = '<p>No relevant news articles found today.</p>';
         return;
     }
 
-    renderNews(articles);
+    renderAggregatedNews(articles);
 }
 
-function renderNews(articles) {
-    // Apply sorting based on the selected option
+function renderAggregatedNews(articles) {
     const sortOrder = sortOrderSelect.value;
-    let sortedArticles = [...articles]; // Create a shallow copy to sort
+    let sortedArticles = [...articles]; 
 
     switch (sortOrder) {
         case 'published_date_asc':
-            sortedArticles.sort((a, b) => new Date(a.published_date) - new Date(b.published_date));
+            sortedArticles.sort((a, b) => {
+                const dateA = a.published_date ? new Date(a.published_date) : new Date(0);
+                const dateB = b.published_date ? new Date(b.published_date) : new Date(0);
+                return dateA - dateB;
+            });
             break;
         case 'published_date_desc':
-            // Ensure valid dates for sorting, fall back to epoch if invalid
             sortedArticles.sort((a, b) => {
                 const dateA = a.published_date ? new Date(a.published_date) : new Date(0);
                 const dateB = b.published_date ? new Date(b.published_date) : new Date(0);
@@ -52,22 +105,19 @@ function renderNews(articles) {
             });
             break;
         case 'source_asc':
-            sortedArticles.sort((a, b) => (a.source || '').localeCompare(b.source || '')); // Handle null sources
+            sortedArticles.sort((a, b) => (a.source || '').localeCompare(b.source || ''));
             break;
         default:
-            // Default is already desc by date, so no action needed if it's the default
             break;
     }
 
-    newsContainer.innerHTML = ''; // Clear existing content
+    newsContainer.innerHTML = ''; 
 
     sortedArticles.forEach(article => {
-        // Format published_date for display
         const articleDate = article.published_date ? new Date(article.published_date).toLocaleDateString(undefined, {
             year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
         }) : 'N/A';
 
-        // Display keywords as tags
         const keywordsHtml = article.keywords_matched && article.keywords_matched.length > 0
             ? article.keywords_matched.map(keyword => `<span>${keyword}</span>`).join('')
             : '';
@@ -87,8 +137,9 @@ function renderNews(articles) {
     });
 }
 
-// Event listener for sorting dropdown
-sortOrderSelect.addEventListener('change', fetchNewsAndRender);
+// Event listener for sorting
+sortOrderSelect.addEventListener('change', fetchAndRenderAggregatedNews);
 
-// Initial fetch when the page loads
-fetchNewsAndRender();
+// Initial fetches when the page loads
+fetchDailyBriefing();
+fetchAndRenderAggregatedNews();
