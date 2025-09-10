@@ -1,19 +1,24 @@
-// Initialize Supabase client
-// THESE WILL BE REPLACED BY VERCEL ENVIRONMENT VARIABLES IN DEPLOYMENT
-const SUPABASE_URL = "YOUR_SUPABASE_URL"; // Replace with your Supabase Project URL
-const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"; // Replace with your Supabase anon key
+// script.js
+
+// Initialize Supabase client with your project details
+// IMPORTANT: For a production application, these keys should ideally be loaded
+// from environment variables via a build step (e.g., using a framework like Next.js).
+// For this static HTML/JS PoC, directly embedding the public anon key is common,
+// but be aware of the security implications for highly sensitive data in a public repo.
+const SUPABASE_URL = "https://zdcliufkeprmrkxmqifr.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpkY2xpdWZrZXBybXJreG1xaWZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU2Njg0OTEsImV4cCI6MjA3MTI0NDQ5MX0.M8I8qk-oh8H3tZ8-KWHXfoN_p5jhdfRq-4j0OEbiO_s";
 
 const supabase = Supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const newsContainer = document.getElementById('news-container');
 const sortOrderSelect = document.getElementById('sortOrder');
 
-async function fetchNews() {
+async function fetchNewsAndRender() {
     newsContainer.innerHTML = '<p>Loading news...</p>';
+    
     let { data: articles, error } = await supabase
         .from('articles')
-        .select('*')
-        .order('published_date', { ascending: false }); // Default sort: newest first
+        .select('*'); // Fetch all relevant columns
 
     if (error) {
         console.error('Error fetching articles:', error.message);
@@ -39,23 +44,30 @@ function renderNews(articles) {
             sortedArticles.sort((a, b) => new Date(a.published_date) - new Date(b.published_date));
             break;
         case 'published_date_desc':
-            sortedArticles.sort((a, b) => new Date(b.published_date) - new Date(a.published_date));
+            // Ensure valid dates for sorting, fall back to epoch if invalid
+            sortedArticles.sort((a, b) => {
+                const dateA = a.published_date ? new Date(a.published_date) : new Date(0);
+                const dateB = b.published_date ? new Date(b.published_date) : new Date(0);
+                return dateB - dateA;
+            });
             break;
         case 'source_asc':
-            sortedArticles.sort((a, b) => a.source.localeCompare(b.source));
+            sortedArticles.sort((a, b) => (a.source || '').localeCompare(b.source || '')); // Handle null sources
             break;
         default:
-            // Default is already desc by date
+            // Default is already desc by date, so no action needed if it's the default
             break;
     }
 
     newsContainer.innerHTML = ''; // Clear existing content
 
     sortedArticles.forEach(article => {
+        // Format published_date for display
         const articleDate = article.published_date ? new Date(article.published_date).toLocaleDateString(undefined, {
             year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
         }) : 'N/A';
 
+        // Display keywords as tags
         const keywordsHtml = article.keywords_matched && article.keywords_matched.length > 0
             ? article.keywords_matched.map(keyword => `<span>${keyword}</span>`).join('')
             : '';
@@ -64,10 +76,10 @@ function renderNews(articles) {
             <div class="news-card">
                 <h2><a href="${article.url}" target="_blank">${article.title}</a></h2>
                 <p class="news-meta">
-                    <span><strong>Source:</strong> ${article.source}</span>
+                    <span><strong>Source:</strong> ${article.source || 'Unknown'}</span>
                     <span><strong>Published:</strong> ${articleDate}</span>
                 </p>
-                <p class="news-description">${article.description}</p>
+                <p class="news-description">${article.description || 'No description available.'}</p>
                 <div class="news-keywords">${keywordsHtml}</div>
             </div>
         `;
@@ -75,18 +87,8 @@ function renderNews(articles) {
     });
 }
 
-// Event listener for sorting
-sortOrderSelect.addEventListener('change', async () => {
-    // Fetch again to ensure fresh data and re-sort, or just re-render if data is already loaded
-    // For simplicity, we'll re-fetch with a fresh sort
-    let { data: articles, error } = await supabase
-        .from('articles')
-        .select('*'); // Get all articles without specific order
-    
-    if (!error && articles) {
-        renderNews(articles); // Re-render with the new sort
-    }
-});
+// Event listener for sorting dropdown
+sortOrderSelect.addEventListener('change', fetchNewsAndRender);
 
 // Initial fetch when the page loads
-fetchNews();
+fetchNewsAndRender();
