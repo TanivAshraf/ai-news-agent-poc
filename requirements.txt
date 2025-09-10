@@ -1,4 +1,0 @@
-requests
-feedparser
-google-generativeai
-supabase-py # Add this line
