@@ -7,7 +7,7 @@ import google.generativeai as genai
 from datetime import datetime, timedelta, date
 import re
 from supabase import create_client, Client
-from bs4 import BeautifulSoup # New import for HTML parsing
+from bs4 import BeautifulSoup
 
 # --- Configuration (Get these from your environment variables) ---
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
@@ -15,6 +15,40 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY") # service_role key
 SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY") # New key
+
+# --- Helper for Date Parsing ---
+def _parse_date_string(date_string):
+    """
+    Attempts to parse a date string into a datetime object using common formats.
+    Returns datetime.min if parsing fails.
+    """
+    if not date_string:
+        return datetime.min # Use a minimum date for sorting if no date is available
+
+    # Common formats to try
+    formats = [
+        '%Y-%m-%dT%H:%M:%SZ',  # ISO format with Z (News API)
+        '%Y-%m-%dT%H:%M:%S%z',  # ISO format with offset
+        '%a, %d %b %Y %H:%M:%S %z', # RFC 822 with +/- offset (e.g., Wed, 10 Sep 2025 19:51:39 +0000)
+        '%a, %d %b %Y %H:%M:%S %Z', # RFC 822 with timezone name (e.g., Wed, 10 Sep 2025 19:51:39 UTC)
+        '%a, %d %b %Y %H:%M:%S', # RFC 822 without timezone (assume UTC or local if needed)
+        '%Y-%m-%d %H:%M:%S', # Common database format
+        '%Y-%m-%d', # Date only
+    ]
+
+    # Try to clean up timezone names if present before parsing, or replace 'Z'
+    cleaned_date_string = date_string.replace('Z', '+00:00').strip()
+    # Simple replacement for common TZ names if strptime doesn't handle them
+    cleaned_date_string = re.sub(r' (UTC|GMT)$', ' +0000', cleaned_date_string, flags=re.IGNORECASE)
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(cleaned_date_string, fmt)
+        except ValueError:
+            pass # Try next format
+
+    print(f"Warning: Could not parse date string '{date_string}' with any known format.")
+    return datetime.min # Return minimum date if all attempts fail
 
 # --- Configure Google Gemini ---
 def get_gemini_model():
@@ -39,13 +73,13 @@ def get_gemini_model():
 
     # Priority 1: Try 'models/gemini-pro'
     for m in available_models:
-        if m.name == 'models/gemini-pro' and 'generateContent' in m.supported_generation_methods: # Corrected comparison
+        if m.name == 'models/gemini-pro' and 'generateContent' in m.supported_generation_methods:
             print("Found suitable Gemini model: models/gemini-pro (preferred).")
             return genai.GenerativeModel('gemini-pro')
             
     # Priority 2: Fallback to 'models/gemini-1.5-pro' if 'gemini-pro' isn't available or suitable
     for m in available_models:
-        if m.name == 'models/gemini-1.5-pro' and 'generateContent' in m.supported_generation_methods: # Corrected comparison
+        if m.name == 'models/gemini-1.5-pro' and 'generateContent' in m.supported_generation_methods:
             print("Found suitable Gemini model: models/gemini-1.5-pro (fallback).")
             return genai.GenerativeModel('gemini-1.5-pro')
 
@@ -54,8 +88,7 @@ def get_gemini_model():
     for m in available_models:
         if 'generateContent' in m.supported_generation_methods:
             print(f"Found suitable Gemini model: {m.name} (general fallback).")
-            # Use the actual model name string (e.g., 'gemini-1.5-pro-latest') to initialize
-            return genai.GenerativeModel(m.name.split('/')[-1]) # Extract just the model ID after 'models/'
+            return genai.GenerativeModel(m.name.split('/')[-1])
 
     print("No suitable Gemini model found that supports 'generateContent'. AI analysis will be skipped.")
     return None
@@ -106,7 +139,7 @@ def fetch_articles_from_rss():
                         "source": feed_info["name"],
                         "title": title,
                         "url": link,
-                        "description": summary, # Corrected: using 'summary' variable
+                        "description": summary,
                         "published_date": entry.published if hasattr(entry, 'published') else 'N/A',
                         "keywords_matched": matched_keywords,
                         "full_content": None # Initialize full_content as None
@@ -147,7 +180,6 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
             for article in data['articles']:
                 title = article.get('title', 'No Title')
                 description = article.get('description', 'No description available.')
-                # --- CORRECTED LINE BELOW ---
                 matched_keywords = [k for k in KEYWORDS if re.search(r'\b' + re.escape(k) + r'\b', title + ' ' + description, re.IGNORECASE)]
 
                 if matched_keywords:
@@ -228,38 +260,16 @@ def store_articles_in_supabase(all_articles):
     articles_to_insert = []
 
     for article in unique_articles:
-        pub_date = article['published_date']
-        formatted_date = None
-        try:
-            if 'T' in pub_date and 'Z' in pub_date: # ISO format from News API
-                formatted_date = datetime.strptime(pub_date, '%Y-%m-%dT%H:%M:%SZ').isoformat() + 'Z'
-            elif re.match(r'^\w{3}, \d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2} [+-]\d{4}$', pub_date): # RFC 822 with +/- offset
-                formatted_date = datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %z').isoformat()
-            elif re.match(r'^\w{3}, \d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2} \w{3}$', pub_date): # RFC 822 with timezone name
-                pub_date_no_tz_name = re.sub(r' \w{3}$', ' +0000', pub_date) 
-                try:
-                    formatted_date = datetime.strptime(pub_date_no_tz_name, '%a, %d %b %Y %H:%M:%S %z').isoformat()
-                except ValueError:
-                    print(f"Warning: Failed to parse date '{pub_date}' after timezone name strip.")
-                    formatted_date = None
-            elif pub_date: # Try generic parsing for other non-empty formats
-                try:
-                    formatted_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00') if 'Z' in pub_date else pub_date).isoformat()
-                except ValueError:
-                    print(f"Warning: Generic parsing failed for date '{pub_date}'.")
-                    formatted_date = None
-            else: # pub_date is empty or None
-                formatted_date = None
-        except ValueError as e:
-            print(f"Warning: Could not parse date '{pub_date}'. Error: {e}")
-            formatted_date = None
+        # Use our robust date parser here
+        parsed_datetime = _parse_date_string(article['published_date'])
+        formatted_date = parsed_datetime.isoformat() + 'Z' if parsed_datetime != datetime.min else None
 
         articles_to_insert.append({
             "source": article.get('source'),
             "title": article.get('title'),
             "url": article.get('url'),
             "description": article.get('description'),
-            "published_date": formatted_date,
+            "published_date": formatted_date, # Store the robustly parsed date
             "keywords_matched": article.get('keywords_matched', [])
         })
 
@@ -287,16 +297,14 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         print("No articles to analyze for the daily briefing.")
         return None
 
-    # Sort articles to prioritize most recent/relevant for full content fetching
-    # For a PoC, a simple sort by date is fine. More advanced might consider relevance.
+    # Sort articles by the robustly parsed date
     sorted_articles = sorted(
         articles_for_analysis, 
-        key=lambda x: datetime.fromisoformat(x['published_date'].replace('Z', '+00:00')) if x.get('published_date') else datetime.min, 
+        key=lambda x: _parse_date_string(x.get('published_date')), 
         reverse=True
     )
     
     # Limit number of articles for full content fetching and AI analysis
-    # This is CRITICAL for staying within free tier quotas for ScrapingBee and Gemini
     MAX_ARTICLES_FOR_DEEP_ANALYSIS = 5 
     articles_for_gemini_input = []
     related_urls_for_briefing = []
@@ -471,7 +479,7 @@ def handler(request):
     # Sort them by date to get the most recent for full content.
     sorted_articles = sorted(
         all_fetched_articles,
-        key=lambda x: datetime.fromisoformat(x['published_date'].replace('Z', '+00:00')) if x.get('published_date') else datetime.min,
+        key=lambda x: _parse_date_string(x.get('published_date')), # Use the robust parser here
         reverse=True
     )
     
