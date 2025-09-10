@@ -1,19 +1,25 @@
-    # app.py (This will be the main file name for our script)
+# app.py
 
 import os
 import requests
-import feedparser # New library for RSS
+import feedparser
 import google.generativeai as genai
 from datetime import datetime, timedelta
-import re # For regular expressions to handle keywords
+import re
+from supabase import create_client, Client # New import
 
-# --- Configuration (Get these from your environment variables later) ---
+# --- Configuration (Get these from your environment variables) ---
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") # Still include for future/basic use
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") # Still included for future/basic use
+SUPABASE_URL = os.environ.get("SUPABASE_URL") # New
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY") # New (service_role key)
 
 # Configure Google Gemini (will be used lightly for this PoC)
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-pro') # Still define, but use sparingly for PoC
+model = genai.GenerativeModel('gemini-pro')
+
+# Initialize Supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Specific RSS Feeds for your PoC Sources ---
 RSS_FEEDS = [
@@ -24,7 +30,6 @@ RSS_FEEDS = [
     {"name": "Ontario Newsroom", "url": "https://news.ontario.ca/en/feed"},
     {"name": "The Hub", "url": "https://thehub.ca/feed/"},
     {"name": "The Logic", "url": "https://thelogic.co/feed/"},
-    # Add other RSS feeds here if you find them
 ]
 
 # --- Keywords for Filtering (Case-insensitive) ---
@@ -36,7 +41,6 @@ KEYWORDS = [
     "natural gas", "oil and gas", "hydrogen", "investment tax credits", "clean tax credits",
     "EV rebates"
 ]
-# Create a regex pattern for efficient case-insensitive keyword matching
 KEYWORD_PATTERN = re.compile(r'\b(?:' + '|'.join(re.escape(k) for k in KEYWORDS) + r')\b', re.IGNORECASE)
 
 def fetch_articles_from_rss():
@@ -51,14 +55,16 @@ def fetch_articles_from_rss():
                 link = entry.link if hasattr(entry, 'link') else '#'
                 summary = entry.summary if hasattr(entry, 'summary') else (entry.description if hasattr(entry, 'description') else 'No summary available.')
                 
-                # Basic keyword filtering for PoC
-                if KEYWORD_PATTERN.search(title) or KEYWORD_PATTERN.search(summary):
+                matched_keywords = [k for k in KEYWORDS if re.search(r'\b' + re.escape(k) + r'\b', title + ' ' + summary, re.IGNORECASE)]
+
+                if matched_keywords: # Only add if keywords are found
                     all_articles.append({
                         "source": feed_info["name"],
                         "title": title,
                         "url": link,
                         "description": summary,
-                        "published_date": entry.published if hasattr(entry, 'published') else 'N/A'
+                        "published_date": entry.published if hasattr(entry, 'published') else 'N/A',
+                        "keywords_matched": matched_keywords
                     })
         except Exception as e:
             print(f"Error fetching RSS for {feed_info['name']} ({feed_info['url']}): {e}")
@@ -74,7 +80,6 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days_back)
 
-    # Combine general Canada query with keywords for NewsAPI
     newsapi_query = f"({query}) AND ({' OR '.join(KEYWORDS)})"
 
     url = f"https://newsapi.org/v2/everything"
@@ -93,16 +98,21 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
         response.raise_for_status()
         data = response.json()
         if data['status'] == 'ok':
-            # News API already filters by keywords in the query, so just format
             formatted_articles = []
             for article in data['articles']:
-                formatted_articles.append({
-                    "source": article.get('source', {}).get('name', 'News API'),
-                    "title": article.get('title', 'No Title'),
-                    "url": article.get('url', '#'),
-                    "description": article.get('description', 'No description available.'),
-                    "published_date": article.get('publishedAt', 'N/A')
-                })
+                title = article.get('title', 'No Title')
+                description = article.get('description', 'No description available.')
+                matched_keywords = [k for k in KEYWORDS if re.search(r'\b' + re.escape(k) + r'\b', title + ' ' + description, re.IGNORECASE)]
+
+                if matched_keywords: # Only add if keywords are found
+                    formatted_articles.append({
+                        "source": article.get('source', {}).get('name', 'News API'),
+                        "title": title,
+                        "url": article.get('url', '#'),
+                        "description": description,
+                        "published_date": article.get('publishedAt', 'N/A'),
+                        "keywords_matched": matched_keywords
+                    })
             print(f"Found {len(formatted_articles)} articles from News API.")
             return formatted_articles
         else:
@@ -112,69 +122,89 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
         print(f"Error fetching news from News API: {e}")
         return []
 
-def filter_and_present_articles(all_articles):
-    """Formats the aggregated articles for display."""
-    
+def store_articles_in_supabase(all_articles):
+    """Stores unique aggregated articles into Supabase."""
     if not all_articles:
-        return "No relevant articles found today for your specified sources and keywords."
+        print("No articles to store.")
+        return "No articles processed."
 
-    output = ["<h2>Custom News Aggregator Briefing</h2>", "<hr>"]
-    output.append(f"<p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>")
-    output.append("<p><strong>Filtering Keywords:</strong> " + ", ".join(KEYWORDS) + "</p>")
-    output.append("<hr>")
-
-    # Deduplicate articles based on URL to avoid showing the same article from different feeds/APIs
+    # Deduplicate articles based on URL
     unique_articles = {article['url']: article for article in all_articles}.values()
-    
-    # Sort by published date (most recent first)
-    sorted_articles = sorted(
-        unique_articles, 
-        key=lambda x: datetime.strptime(x['published_date'], '%Y-%m-%dT%H:%M:%SZ') if 'T' in x['published_date'] and 'Z' in x['published_date'] else datetime.min, 
-        reverse=True
-    )
-    
-    for article in sorted_articles:
-        output.append(f"<h3><a href='{article['url']}' target='_blank'>{article['title']}</a></h3>")
-        output.append(f"<p><strong>Source:</strong> {article['source']} | <strong>Published:</strong> {article['published_date']}</p>")
-        output.append(f"<p>{article['description']}</p>")
-        output.append("<hr>")
-    
-    return "\n".join(output)
+    articles_to_insert = []
+
+    print(f"Attempting to insert {len(unique_articles)} unique articles into Supabase.")
+
+    for article in unique_articles:
+        # Format published_date for Supabase timestamp type
+        pub_date = article['published_date']
+        try:
+            # Handle various date formats if necessary, standardizing to ISO 8601
+            if 'T' in pub_date and 'Z' in pub_date: # News API format
+                formatted_date = datetime.strptime(pub_date, '%Y-%m-%dT%H:%M:%SZ').isoformat() + 'Z'
+            else: # RSS may have other formats, try a generic parse
+                formatted_date = datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %z').isoformat() # Example for RFC 822
+        except ValueError:
+            try: # Fallback for simpler RSS date formats
+                formatted_date = datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %Z').isoformat()
+            except ValueError:
+                formatted_date = None # Set to None if parsing fails
+
+
+        articles_to_insert.append({
+            "source": article.get('source'),
+            "title": article.get('title'),
+            "url": article.get('url'),
+            "description": article.get('description'),
+            "published_date": formatted_date,
+            "keywords_matched": article.get('keywords_matched', [])
+        })
+
+    # Insert in batches if many articles (Supabase client handles this by default for small amounts)
+    if articles_to_insert:
+        try:
+            # The 'upsert' method handles inserting new records and updating existing ones (based on unique constraints like 'url')
+            response = supabase.table('articles').upsert(articles_to_insert, on_conflict='url').execute()
+            print(f"Supabase upsert response: {response.data}")
+            return f"Successfully processed {len(response.data)} articles to Supabase."
+        except Exception as e:
+            print(f"Error inserting into Supabase: {e}")
+            return f"Error storing articles: {e}"
+    else:
+        return "No unique articles to store in Supabase after deduplication."
+
 
 def handler(request):
     """
-    This is the entry point for our Vercel serverless function.
-    It will be triggered and run the news gathering and aggregation.
+    This is the entry point for our GitHub Actions script.
+    It runs the news gathering and aggregation and stores data in Supabase.
     """
     try:
-        print("Starting news aggregation PoC...")
+        print("Starting news aggregation PoC (Supabase backend)...")
         
         # Fetch from RSS feeds (primary sources)
         rss_articles = fetch_articles_from_rss()
 
-        # Fetch from News API as a supplement or for sources not in RSS
-        # For this PoC, we'll keep the News API query broad for Canada & keywords
-        # and let deduplication handle overlaps.
+        # Fetch from News API as a supplement
         newsapi_articles = fetch_articles_from_newsapi() 
         
-        # Combine and present
+        # Combine all fetched articles
         all_fetched_articles = rss_articles + newsapi_articles
-        briefing_html = filter_and_present_articles(all_fetched_articles)
         
-        print("Aggregated briefing generated successfully.")
+        # Store them in Supabase
+        result_message = store_articles_in_supabase(all_fetched_articles)
         
-        # Vercel function will display this HTML content directly.
-        return briefing_html
+        print(f"Aggregation complete: {result_message}")
+        return result_message # This will be visible in GitHub Actions logs
     except Exception as e:
         print(f"An unexpected error occurred in handler: {e}")
-        return f"<h1>An error occurred:</h1><p>{e}</p><p>Check Vercel logs for more details.</p>"
+        return f"An error occurred: {e}"
 
 # If you want to test locally (optional, for developers)
 if __name__ == "__main__":
-    # For local testing, ensure NEWS_API_KEY and GEMINI_API_KEY are set in your environment
-    # or replace os.environ.get with your actual keys for quick testing (NOT for production)
+    # For local testing, ensure NEWS_API_KEY, GEMINI_API_KEY, SUPABASE_URL, SUPABASE_KEY
+    # are set in your environment variables, or hardcode them temporarily for testing (NOT for production)
     # os.environ["NEWS_API_KEY"] = "YOUR_NEWS_API_KEY"
-    # os.environ["GEMINI_API_KEY"] = "YOUR_GEMINI_API_KEY" # Not strictly needed for this PoC but good practice
-    
-    # Simulate a request
+    # os.environ["GEMINI_API_KEY"] = "YOUR_GEMINI_API_KEY"
+    # os.environ["SUPABASE_URL"] = "YOUR_SUPABASE_URL"
+    # os.environ["SUPABASE_KEY"] = "YOUR_SUPABASE_SERVICE_ROLE_KEY"
     print(handler(None))
