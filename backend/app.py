@@ -17,7 +17,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY") # service_role key
 # --- Configure Google Gemini ---
 def get_gemini_model():
     """
-    Configures Google Gemini and tries to find a suitable model, prioritizing 'gemini-pro'.
+    Configures Google Gemini and finds a suitable model, prioritizing 'gemini-pro'.
     """
     if not GEMINI_API_KEY:
         print("GEMINI_API_KEY is not set. Cannot configure Gemini.")
@@ -25,25 +25,21 @@ def get_gemini_model():
 
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # --- Priority 1: Try 'gemini-pro' first ---
-    try:
-        model_pro = genai.GenerativeModel('gemini-pro')
-        if 'generateContent' in model_pro.model_info.supported_generation_methods:
-            print("Found suitable Gemini model: models/gemini-pro (preferred).")
-            return model_pro
-        else:
-            print("models/gemini-pro found, but does not support 'generateContent'.")
-    except Exception as e:
-        print(f"Failed to initialize models/gemini-pro directly: {e}")
-
-    # --- Priority 2: If gemini-pro isn't ideal, iterate through all models ---
-    print("Searching for another suitable Gemini model...")
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            print(f"Found suitable Gemini model: {m.name}")
-            return genai.GenerativeModel(m.name)
+    available_models = list(genai.list_models())
     
-    print("No Gemini model found that supports 'generateContent'. AI analysis will be skipped.")
+    # Priority 1: Try 'gemini-pro'
+    for m in available_models:
+        if m.name == 'gemini-pro' and 'generateContent' in m.supported_generation_methods:
+            print("Found suitable Gemini model: models/gemini-pro (preferred).")
+            return genai.GenerativeModel('gemini-pro')
+            
+    # Priority 2: Fallback to 'gemini-1.5-pro' if 'gemini-pro' isn't available or suitable
+    for m in available_models:
+        if m.name == 'gemini-1.5-pro' and 'generateContent' in m.supported_generation_methods: # Note: 'gemini-1.5-pro-latest' often resolves to 'gemini-1.5-pro'
+            print("Found suitable Gemini model: models/gemini-1.5-pro (fallback).")
+            return genai.GenerativeModel('gemini-1.5-pro')
+
+    print("No suitable Gemini model found that supports 'generateContent'. AI analysis will be skipped.")
     return None
 
 model = get_gemini_model() # Initialize the model dynamically
@@ -281,7 +277,6 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
 
     except Exception as e:
         print(f"Error generating content with Gemini: {e}")
-        # If there's an error, return a minimal briefing to log the issue
         return {
             "title": f"AI Briefing Error - {date.today().strftime('%Y-%m-%d')}",
             "summary_text": f"Error during AI analysis: {e}. Raw AI response might be incomplete or empty.",
@@ -383,20 +378,18 @@ def handler(request):
         briefing_data = analyze_and_brief_with_gemini(all_fetched_articles)
         briefing_result = store_briefing_in_supabase(briefing_data)
     else:
-        briefing_result = "Gemini model could not be initialized, skipping AI analysis."
-        # If model init failed, analyze_and_brief_with_gemini wouldn't be called,
-        # so we also ensure to insert an "error briefing" if the model failed to init.
-        if not model:
-            error_briefing = {
-                "title": f"AI Briefing Initialization Error - {date.today().strftime('%Y-%m-%d')}",
-                "summary_text": "Gemini model could not be initialized, likely due to API key issues or model unavailability. Please check logs.",
-                "key_developments": [],
-                "strategic_implications": "AI analysis skipped.",
-                "suggested_reactions": "Check Gemini API key and model availability.",
-                "related_article_urls": [a.get('url', '#') for a in all_fetched_articles],
-                "raw_ai_response": "Model initialization failed."
-            }
-            briefing_result = store_briefing_in_supabase(error_briefing)
+        # If model init failed, store an "error briefing"
+        error_briefing = {
+            "title": f"AI Briefing Initialization Error - {date.today().strftime('%Y-%m-%d')}",
+            "summary_text": "Gemini model could not be initialized, likely due to API key issues or model unavailability. Please check backend logs.",
+            "key_developments": [],
+            "strategic_implications": "AI analysis skipped.",
+            "suggested_reactions": "Check Gemini API key and model availability.",
+            "related_article_urls": [a.get('url', '#') for a in all_fetched_articles],
+            "raw_ai_response": "Model initialization failed."
+        }
+        briefing_result = store_briefing_in_supabase(error_briefing)
+        print(f"Gemini model could not be initialized, skipping AI analysis. Briefing storage status: {briefing_result}")
 
 
     print(f"Full run complete. Briefing storage status: {briefing_result}")
