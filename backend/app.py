@@ -39,13 +39,13 @@ def get_gemini_model():
 
     # Priority 1: Try 'models/gemini-pro'
     for m in available_models:
-        if m.name == 'models/gemini-pro' and 'generateContent' in m.supported_generation_methods:
+        if m.name == 'models/gemini-pro' and 'generateContent' in m.supported_generation_methods: # Corrected comparison
             print("Found suitable Gemini model: models/gemini-pro (preferred).")
             return genai.GenerativeModel('gemini-pro')
             
     # Priority 2: Fallback to 'models/gemini-1.5-pro' if 'gemini-pro' isn't available or suitable
     for m in available_models:
-        if m.name == 'models/gemini-1.5-pro' and 'generateContent' in m.supported_generation_methods:
+        if m.name == 'models/gemini-1.5-pro' and 'generateContent' in m.supported_generation_methods: # Corrected comparison
             print("Found suitable Gemini model: models/gemini-1.5-pro (fallback).")
             return genai.GenerativeModel('gemini-1.5-pro')
 
@@ -54,7 +54,8 @@ def get_gemini_model():
     for m in available_models:
         if 'generateContent' in m.supported_generation_methods:
             print(f"Found suitable Gemini model: {m.name} (general fallback).")
-            return genai.GenerativeModel(m.name.split('/')[-1])
+            # Use the actual model name string (e.g., 'gemini-1.5-pro-latest') to initialize
+            return genai.GenerativeModel(m.name.split('/')[-1]) # Extract just the model ID after 'models/'
 
     print("No suitable Gemini model found that supports 'generateContent'. AI analysis will be skipped.")
     return None
@@ -105,7 +106,7 @@ def fetch_articles_from_rss():
                         "source": feed_info["name"],
                         "title": title,
                         "url": link,
-                        "description": summary,
+                        "description": summary, # Corrected: using 'summary' variable
                         "published_date": entry.published if hasattr(entry, 'published') else 'N/A',
                         "keywords_matched": matched_keywords,
                         "full_content": None # Initialize full_content as None
@@ -146,7 +147,8 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
             for article in data['articles']:
                 title = article.get('title', 'No Title')
                 description = article.get('description', 'No description available.')
-                matched_keywords = [k for k k in KEYWORDS if re.search(r'\b' + re.escape(k) + r'\b', title + ' ' + description, re.IGNORECASE)]
+                # --- CORRECTED LINE BELOW ---
+                matched_keywords = [k for k in KEYWORDS if re.search(r'\b' + re.escape(k) + r'\b', title + ' ' + description, re.IGNORECASE)]
 
                 if matched_keywords:
                     formatted_articles.append({
@@ -505,6 +507,7 @@ def handler(request):
         }
         briefing_result = store_briefing_in_supabase(error_briefing)
         print(f"Gemini model could not be initialized, skipping AI analysis. Briefing storage status: {briefing_result}")
+
 
     print(f"Full run complete. Briefing storage status: {briefing_result}")
     return f"AI Agent run completed. Articles: {articles_stored_count}, Briefing: {briefing_result}"
