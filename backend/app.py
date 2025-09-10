@@ -28,24 +28,32 @@ def get_gemini_model():
     available_models = []
     try:
         available_models = list(genai.list_models())
-        print(f"DEBUG: Found {len(available_models)} models.") # Debug print added back correctly
+        print(f"DEBUG: Found {len(available_models)} models.")
         for m in available_models:
             print(f"DEBUG: Model '{m.name}' supports: {m.supported_generation_methods}")
     except Exception as e:
         print(f"Error listing Gemini models: {e}. Check API key validity and network access.")
         return None
 
-    # Priority 1: Try 'gemini-pro'
+    # Priority 1: Try 'models/gemini-pro'
     for m in available_models:
-        if m.name == 'gemini-pro' and 'generateContent' in m.supported_generation_methods:
+        if m.name == 'models/gemini-pro' and 'generateContent' in m.supported_generation_methods: # Corrected comparison
             print("Found suitable Gemini model: models/gemini-pro (preferred).")
             return genai.GenerativeModel('gemini-pro')
             
-    # Priority 2: Fallback to 'gemini-1.5-pro' if 'gemini-pro' isn't available or suitable
+    # Priority 2: Fallback to 'models/gemini-1.5-pro'
     for m in available_models:
-        if m.name == 'gemini-1.5-pro' and 'generateContent' in m.supported_generation_methods:
+        if m.name == 'models/gemini-1.5-pro' and 'generateContent' in m.supported_generation_methods: # Corrected comparison
             print("Found suitable Gemini model: models/gemini-1.5-pro (fallback).")
             return genai.GenerativeModel('gemini-1.5-pro')
+
+    # Priority 3: General fallback - find any model that supports generateContent
+    print("Neither 'gemini-pro' nor 'gemini-1.5-pro' explicitly found. Searching for any 'generateContent' supporting model.")
+    for m in available_models:
+        if 'generateContent' in m.supported_generation_methods:
+            print(f"Found suitable Gemini model: {m.name} (general fallback).")
+            # Use the actual model name string (e.g., 'gemini-1.5-pro-latest') to initialize
+            return genai.GenerativeModel(m.name.split('/')[-1]) # Extract just the model ID after 'models/'
 
     print("No suitable Gemini model found that supports 'generateContent'. AI analysis will be skipped.")
     return None
@@ -96,7 +104,7 @@ def fetch_articles_from_rss():
                         "source": feed_info["name"],
                         "title": title,
                         "url": link,
-                        "description": summary,
+                        "description": article.get('description') if hasattr(article, 'description') else summary, # Use existing description if present
                         "published_date": entry.published if hasattr(entry, 'published') else 'N/A',
                         "keywords_matched": matched_keywords
                     })
@@ -251,7 +259,7 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         "- [Implication 2]\n\n"
         "**Suggested Reactions:** (Based on the news, recommend positive or concerned tones)\n"
         "- **Positive:** [If supportive public policy, funding, etc., suggest an action/stance]\n"
-        "- **Concerned:** [If harmful public policy, 'greenwashing', etc., suggest an router_action/stance]\n\n"
+        "- **Concerned:** [If harmful public policy, 'greenwashing', etc., suggest an action/stance]\n\n"
         "**Relevant Article URLs:**\n"
         "- [Link 1: Brief description]\n"
         "- [Link 2: Brief description]\n"
