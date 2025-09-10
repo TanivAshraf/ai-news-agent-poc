@@ -104,7 +104,7 @@ def fetch_articles_from_rss():
                         "source": feed_info["name"],
                         "title": title,
                         "url": link,
-                        "description": article.get('description') if hasattr(article, 'description') else summary, # Use existing description if present
+                        "description": summary, # Corrected: using 'summary' variable
                         "published_date": entry.published if hasattr(entry, 'published') else 'N/A',
                         "keywords_matched": matched_keywords
                     })
