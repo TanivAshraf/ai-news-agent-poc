@@ -1,22 +1,23 @@
-# app.py
+# backend/app.py
 
 import os
 import requests
 import feedparser
 import google.generativeai as genai
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import re
-from supabase import create_client, Client # New import
+from supabase import create_client, Client
 
 # --- Configuration (Get these from your environment variables) ---
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") # Still included for future/basic use
-SUPABASE_URL = os.environ.get("SUPABASE_URL") # New
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY") # New (service_role key)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY") # service_role key
 
-# Configure Google Gemini (will be used lightly for this PoC)
+# Configure Google Gemini
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-pro')
+# We'll use a more advanced model if available, otherwise gemini-pro is good
+model = genai.GenerativeModel('gemini-pro') 
 
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -57,7 +58,7 @@ def fetch_articles_from_rss():
                 
                 matched_keywords = [k for k in KEYWORDS if re.search(r'\b' + re.escape(k) + r'\b', title + ' ' + summary, re.IGNORECASE)]
 
-                if matched_keywords: # Only add if keywords are found
+                if matched_keywords:
                     all_articles.append({
                         "source": feed_info["name"],
                         "title": title,
@@ -104,7 +105,7 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
                 description = article.get('description', 'No description available.')
                 matched_keywords = [k for k in KEYWORDS if re.search(r'\b' + re.escape(k) + r'\b', title + ' ' + description, re.IGNORECASE)]
 
-                if matched_keywords: # Only add if keywords are found
+                if matched_keywords:
                     formatted_articles.append({
                         "source": article.get('source', {}).get('name', 'News API'),
                         "title": title,
@@ -113,7 +114,7 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
                         "published_date": article.get('publishedAt', 'N/A'),
                         "keywords_matched": matched_keywords
                     })
-            print(f"Found {len(formatted_articles)} articles from News API.")
+                print(f"Found {len(formatted_articles)} articles from News API.")
             return formatted_articles
         else:
             print(f"News API Error: {data.get('message', 'Unknown error')}")
@@ -125,30 +126,35 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
 def store_articles_in_supabase(all_articles):
     """Stores unique aggregated articles into Supabase."""
     if not all_articles:
-        print("No articles to store.")
-        return "No articles processed."
+        print("No articles to store in 'articles' table.")
+        return 0
 
-    # Deduplicate articles based on URL
     unique_articles = {article['url']: article for article in all_articles}.values()
     articles_to_insert = []
 
-    print(f"Attempting to insert {len(unique_articles)} unique articles into Supabase.")
-
     for article in unique_articles:
-        # Format published_date for Supabase timestamp type
         pub_date = article['published_date']
+        formatted_date = None
         try:
-            # Handle various date formats if necessary, standardizing to ISO 8601
-            if 'T' in pub_date and 'Z' in pub_date: # News API format
+            if 'T' in pub_date and 'Z' in pub_date: # ISO format from News API
                 formatted_date = datetime.strptime(pub_date, '%Y-%m-%dT%H:%M:%SZ').isoformat() + 'Z'
-            else: # RSS may have other formats, try a generic parse
-                formatted_date = datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %z').isoformat() # Example for RFC 822
-        except ValueError:
-            try: # Fallback for simpler RSS date formats
-                formatted_date = datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %Z').isoformat()
-            except ValueError:
-                formatted_date = None # Set to None if parsing fails
-
+            elif re.match(r'^\w{3}, \d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2} [+-]\d{4}$', pub_date): # RFC 822 with +/- offset
+                formatted_date = datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %z').isoformat()
+            elif re.match(r'^\w{3}, \d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2} \w{3}$', pub_date): # RFC 822 with timezone name
+                 # This format is tricky for strptime as %Z doesn't handle all names reliably.
+                 # A more robust solution might involve dateutil.parser, but for PoC, we'll try to convert common ones.
+                 # For simplicity in a PoC, let's assume UTC if timezone name is not easily parsed by strptime
+                pub_date_no_tz_name = re.sub(r' \w{3}$', ' +0000', pub_date) # Replace name with UTC offset for parsing
+                try:
+                    formatted_date = datetime.strptime(pub_date_no_tz_name, '%a, %d %b %Y %H:%M:%S %z').isoformat()
+                except ValueError:
+                    print(f"Warning: Failed to parse date '{pub_date}' after timezone name strip.")
+                    formatted_date = None # Fallback
+            else: # Try generic parsing for other formats
+                formatted_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00')).isoformat()
+        except ValueError as e:
+            print(f"Warning: Could not parse date '{pub_date}'. Error: {e}")
+            formatted_date = None # Set to None if parsing fails
 
         articles_to_insert.append({
             "source": article.get('source'),
@@ -159,52 +165,211 @@ def store_articles_in_supabase(all_articles):
             "keywords_matched": article.get('keywords_matched', [])
         })
 
-    # Insert in batches if many articles (Supabase client handles this by default for small amounts)
     if articles_to_insert:
         try:
-            # The 'upsert' method handles inserting new records and updating existing ones (based on unique constraints like 'url')
             response = supabase.table('articles').upsert(articles_to_insert, on_conflict='url').execute()
-            print(f"Supabase upsert response: {response.data}")
-            return f"Successfully processed {len(response.data)} articles to Supabase."
+            print(f"Successfully upserted {len(response.data)} articles into 'articles' table.")
+            return len(response.data)
         except Exception as e:
-            print(f"Error inserting into Supabase: {e}")
-            return f"Error storing articles: {e}"
+            print(f"Error inserting into Supabase 'articles' table: {e}")
+            return 0
     else:
-        return "No unique articles to store in Supabase after deduplication."
+        return 0
 
+def analyze_and_brief_with_gemini(articles_for_analysis):
+    """
+    Uses Gemini to analyze articles and generate a consolidated daily briefing.
+    """
+    if not GEMINI_API_KEY:
+        print("GEMINI_API_KEY is not set. Skipping AI analysis.")
+        return None
+
+    if not articles_for_analysis:
+        print("No articles to analyze for the daily briefing.")
+        return None
+
+    # Construct the persona and task for Gemini
+    persona = (
+        "You are a senior political analyst for 'New Economy Canada'. "
+        "Your raison d’etre is to ramp up awareness of and support for solutions "
+        "and good things happening in the clean economy. "
+        "You communicate the urgency for Canada to act now to remain relevant in the global economy. "
+        "You are trying to accelerate the clean energy transition and make Canada a leader in this transition. "
+        "You always look for concrete policy actions, investment trends, and potential challenges or 'greenwashing'. "
+    )
+
+    task_instruction = (
+        "Based on the following news articles, generate a 'Morning Briefing' for today. "
+        "Your output should be structured to help 'New Economy Canada' monitor, observe, and react to news, "
+        "and understand the narrative being shaped. "
+        "Prioritize quality and focus. Here's the structure I need:\n\n"
+        "**Briefing Title:** AI Morning Briefing - [Today's Date]\n\n"
+        "**Executive Summary:** A concise overview of the most critical developments (2-3 sentences).\n\n"
+        "**Key Developments:**\n"
+        "- [Bullet point 1: Major news item, e.g., 'Government announces X funding for Y project']\n"
+        "- [Bullet point 2: Key policy shift, e.g., 'New provincial legislation on Z']\n"
+        "- [Bullet point 3: Industry trends or notable investments, e.g., 'Company A invests in B technology']\n"
+        "- ... (up to 5 bullet points)\n\n"
+        "**Strategic Implications for New Economy Canada:** (Analyze potential impacts, what to watch for, narrative shaping elements)\n"
+        "- [Implication 1]\n"
+        "- [Implication 2]\n\n"
+        "**Suggested Reactions:** (Based on the news, recommend positive or concerned tones)\n"
+        "- **Positive:** [If supportive public policy, funding, etc., suggest an action/stance]\n"
+        "- **Concerned:** [If harmful public policy, 'greenwashing', etc., suggest an action/stance]\n\n"
+        "**Relevant Article URLs:**\n"
+        "- [Link 1: Brief description]\n"
+        "- [Link 2: Brief description]\n"
+        "- ...\n\n"
+        "Here are the articles for your analysis (focus on titles and descriptions):\n\n"
+    )
+
+    articles_text_for_ai = []
+    related_urls = []
+    for i, article in enumerate(articles_for_analysis):
+        title = article.get('title', 'No Title')
+        url = article.get('url', '#')
+        description = article.get('description', 'No description available.')
+        
+        # Concatenate title and description for AI input
+        article_content = f"Title: {title}\nDescription: {description}\nURL: {url}"
+        
+        # If we could fetch more content in future, it would go here
+        # E.g., article_content += f"\nFull Text Snippet: {full_article_text[:1000]}"
+
+        articles_text_for_ai.append(f"--- Article {i+1} ---\n{article_content}\n")
+        related_urls.append(url) # Keep track of URLs for the briefing
+
+    full_prompt = persona + "\n\n" + task_instruction + "\n".join(articles_text_for_ai)
+
+    try:
+        print("Sending articles to Gemini for analysis...")
+        response = model.generate_content(full_prompt)
+        briefing_text = response.text
+        print("Gemini analysis complete.")
+        
+        # Parse Gemini's structured response
+        briefing_data = parse_gemini_briefing(briefing_text, related_urls)
+        briefing_data['raw_ai_response'] = briefing_text # Store full response for debugging
+        return briefing_data
+
+    except Exception as e:
+        print(f"Error generating content with Gemini: {e}")
+        return None
+
+def parse_gemini_briefing(briefing_text, related_urls):
+    """Parses the structured text from Gemini into a dictionary."""
+    parsed_data = {
+        "title": "AI Morning Briefing - " + date.today().strftime('%Y-%m-%d'),
+        "summary_text": "",
+        "key_developments": [],
+        "strategic_implications": "",
+        "suggested_reactions": "",
+        "related_article_urls": related_urls # Use original fetched URLs
+    }
+
+    # Regex patterns to extract sections
+    sections = {
+        "Briefing Title": r"^\*\*Briefing Title:\*\* (.*?)$",
+        "Executive Summary": r"^\*\*Executive Summary:\*\*\s*(.*?)(?=\n\n\*\*Key Developments\*\*|$)",
+        "Key Developments": r"^\*\*Key Developments:\*\*\s*(.*?)(?=\n\n\*\*Strategic Implications\*\*|$)",
+        "Strategic Implications for New Economy Canada": r"^\*\*Strategic Implications for New Economy Canada:\*\*\s*(.*?)(?=\n\n\*\*Suggested Reactions\*\*|$)",
+        "Suggested Reactions": r"^\*\*Suggested Reactions:\*\*\s*(.*?)(?=\n\n\*\*Relevant Article URLs\*\*|$)",
+        # "Relevant Article URLs" will be handled separately as we pass the list directly
+    }
+
+    # Extract title
+    title_match = re.search(sections["Briefing Title"], briefing_text, re.MULTILINE)
+    if title_match:
+        parsed_data["title"] = title_match.group(1).strip()
+    
+    # Extract executive summary
+    summary_match = re.search(sections["Executive Summary"], briefing_text, re.DOTALL | re.MULTILINE)
+    if summary_match:
+        parsed_data["summary_text"] = summary_match.group(1).strip()
+
+    # Extract key developments
+    dev_match = re.search(sections["Key Developments"], briefing_text, re.DOTALL | re.MULTILINE)
+    if dev_match:
+        dev_text = dev_match.group(1)
+        parsed_data["key_developments"] = [item.strip() for item in re.findall(r'^- (.+)$', dev_text, re.MULTILINE)]
+    
+    # Extract strategic implications
+    imp_match = re.search(sections["Strategic Implications for New Economy Canada"], briefing_text, re.DOTALL | re.MULTILINE)
+    if imp_match:
+        parsed_data["strategic_implications"] = imp_match.group(1).strip()
+
+    # Extract suggested reactions
+    react_match = re.search(sections["Suggested Reactions"], briefing_text, re.DOTALL | re.MULTILINE)
+    if react_match:
+        parsed_data["suggested_reactions"] = react_match.group(1).strip()
+
+    return parsed_data
+
+def store_briefing_in_supabase(briefing_data):
+    """Stores the AI-generated briefing into the 'daily_briefings' table."""
+    if not briefing_data:
+        print("No briefing data to store.")
+        return "No briefing processed."
+
+    # Prepare data for insertion
+    briefing_to_insert = {
+        "briefing_date": date.today().isoformat(), # Store as date type
+        "title": briefing_data.get("title"),
+        "summary_text": briefing_data.get("summary_text"),
+        "key_developments": briefing_data.get("key_developments"),
+        "strategic_implications": briefing_data.get("strategic_implications"),
+        "suggested_reactions": briefing_data.get("suggested_reactions"),
+        "related_article_urls": briefing_data.get("related_article_urls"),
+        "raw_ai_response": briefing_data.get("raw_ai_response")
+    }
+
+    try:
+        # Use upsert based on briefing_date to update existing daily briefing if run multiple times in a day
+        response = supabase.table('daily_briefings').upsert(
+            briefing_to_insert, 
+            on_conflict='briefing_date' # Assuming briefing_date is unique for daily updates
+        ).execute()
+        
+        print(f"Successfully stored/updated daily briefing in Supabase: {response.data}")
+        return "Daily briefing stored successfully."
+    except Exception as e:
+        print(f"Error storing daily briefing in Supabase: {e}")
+        return f"Error storing daily briefing: {e}"
 
 def handler(request):
     """
-    This is the entry point for our GitHub Actions script.
-    It runs the news gathering and aggregation and stores data in Supabase.
+    Main handler for the GitHub Actions workflow.
+    Fetches news, stores individual articles, then generates and stores a daily briefing.
     """
-    try:
-        print("Starting news aggregation PoC (Supabase backend)...")
-        
-        # Fetch from RSS feeds (primary sources)
-        rss_articles = fetch_articles_from_rss()
+    print("Starting AI News Agent (with Brain)...")
+    
+    # 1. Fetch articles from RSS feeds
+    rss_articles = fetch_articles_from_rss()
 
-        # Fetch from News API as a supplement
-        newsapi_articles = fetch_articles_from_newsapi() 
-        
-        # Combine all fetched articles
-        all_fetched_articles = rss_articles + newsapi_articles
-        
-        # Store them in Supabase
-        result_message = store_articles_in_supabase(all_fetched_articles)
-        
-        print(f"Aggregation complete: {result_message}")
-        return result_message # This will be visible in GitHub Actions logs
-    except Exception as e:
-        print(f"An unexpected error occurred in handler: {e}")
-        return f"An error occurred: {e}"
+    # 2. Fetch articles from News API (supplementary)
+    newsapi_articles = fetch_articles_from_newsapi() 
+    
+    # 3. Combine all fetched articles and deduplicate
+    all_fetched_articles = rss_articles + newsapi_articles
+    
+    # 4. Store individual articles in the 'articles' table (for historical record/raw data)
+    articles_stored_count = store_articles_in_supabase(all_fetched_articles)
+    print(f"Stored {articles_stored_count} unique articles in 'articles' table.")
 
-# If you want to test locally (optional, for developers)
+    # 5. Analyze articles with Gemini to create the daily briefing
+    briefing_data = analyze_and_brief_with_gemini(all_fetched_articles)
+
+    # 6. Store the AI-generated briefing in the 'daily_briefings' table
+    briefing_result = store_briefing_in_supabase(briefing_data)
+    
+    print(f"Full run complete. Briefing storage status: {briefing_result}")
+    return f"AI Agent run completed. Articles: {articles_stored_count}, Briefing: {briefing_result}"
+
+# For local testing (optional)
 if __name__ == "__main__":
-    # For local testing, ensure NEWS_API_KEY, GEMINI_API_KEY, SUPABASE_URL, SUPABASE_KEY
-    # are set in your environment variables, or hardcode them temporarily for testing (NOT for production)
+    # Ensure environment variables are set for local testing
     # os.environ["NEWS_API_KEY"] = "YOUR_NEWS_API_KEY"
     # os.environ["GEMINI_API_KEY"] = "YOUR_GEMINI_API_KEY"
     # os.environ["SUPABASE_URL"] = "YOUR_SUPABASE_URL"
-    # os.environ["SUPABASE_KEY"] = "YOUR_SUPABASE_SERVICE_ROLE_KEY"
+    # os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "YOUR_SUPABASE_SERVICE_ROLE_KEY"
     print(handler(None))
