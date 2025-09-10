@@ -14,10 +14,32 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY") # service_role key
 
-# Configure Google Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-# We'll use a more advanced model if available, otherwise gemini-pro is good
-model = genai.GenerativeModel('gemini-pro') 
+# --- Configure Google Gemini ---
+def get_gemini_model():
+    """
+    Configures Google Gemini and finds a suitable model that supports generateContent.
+    """
+    if not GEMINI_API_KEY:
+        print("GEMINI_API_KEY is not set. Cannot configure Gemini.")
+        return None
+
+    genai.configure(api_key=GEMINI_API_KEY)
+    
+    # Try to find a suitable model
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            print(f"Found suitable Gemini model: {m.name}")
+            return genai.GenerativeModel(m.name)
+    
+    print("No Gemini model found that supports 'generateContent'. Falling back to 'gemini-pro' (may still fail).")
+    # As a last resort fallback, try gemini-pro directly, which might work in some contexts
+    try:
+        return genai.GenerativeModel('gemini-pro')
+    except Exception as e:
+        print(f"Failed to initialize fallback 'gemini-pro' model: {e}")
+        return None
+
+model = get_gemini_model() # Initialize the model dynamically
 
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -141,20 +163,25 @@ def store_articles_in_supabase(all_articles):
             elif re.match(r'^\w{3}, \d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2} [+-]\d{4}$', pub_date): # RFC 822 with +/- offset
                 formatted_date = datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %z').isoformat()
             elif re.match(r'^\w{3}, \d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2} \w{3}$', pub_date): # RFC 822 with timezone name
-                 # This format is tricky for strptime as %Z doesn't handle all names reliably.
-                 # A more robust solution might involve dateutil.parser, but for PoC, we'll try to convert common ones.
-                 # For simplicity in a PoC, let's assume UTC if timezone name is not easily parsed by strptime
-                pub_date_no_tz_name = re.sub(r' \w{3}$', ' +0000', pub_date) # Replace name with UTC offset for parsing
+                pub_date_no_tz_name = re.sub(r' \w{3}$', ' +0000', pub_date) 
                 try:
                     formatted_date = datetime.strptime(pub_date_no_tz_name, '%a, %d %b %Y %H:%M:%S %z').isoformat()
                 except ValueError:
                     print(f"Warning: Failed to parse date '{pub_date}' after timezone name strip.")
-                    formatted_date = None # Fallback
-            else: # Try generic parsing for other formats
-                formatted_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00')).isoformat()
+                    formatted_date = None
+            elif pub_date: # Try generic parsing for other non-empty formats
+                try:
+                    # Attempt ISO 8601 first, then generic
+                    formatted_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00') if 'Z' in pub_date else pub_date).isoformat()
+                except ValueError:
+                    # Fallback for more general parsing if needed, but keeping it simple for PoC
+                    print(f"Warning: Generic parsing failed for date '{pub_date}'.")
+                    formatted_date = None
+            else: # pub_date is empty or None
+                formatted_date = None
         except ValueError as e:
             print(f"Warning: Could not parse date '{pub_date}'. Error: {e}")
-            formatted_date = None # Set to None if parsing fails
+            formatted_date = None
 
         articles_to_insert.append({
             "source": article.get('source'),
@@ -180,8 +207,8 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
     """
     Uses Gemini to analyze articles and generate a consolidated daily briefing.
     """
-    if not GEMINI_API_KEY:
-        print("GEMINI_API_KEY is not set. Skipping AI analysis.")
+    if not model: # Check if model was successfully initialized
+        print("Gemini model not initialized. Skipping AI analysis.")
         return None
 
     if not articles_for_analysis:
@@ -230,14 +257,10 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         url = article.get('url', '#')
         description = article.get('description', 'No description available.')
         
-        # Concatenate title and description for AI input
         article_content = f"Title: {title}\nDescription: {description}\nURL: {url}"
         
-        # If we could fetch more content in future, it would go here
-        # E.g., article_content += f"\nFull Text Snippet: {full_article_text[:1000]}"
-
         articles_text_for_ai.append(f"--- Article {i+1} ---\n{article_content}\n")
-        related_urls.append(url) # Keep track of URLs for the briefing
+        related_urls.append(url)
 
     full_prompt = persona + "\n\n" + task_instruction + "\n".join(articles_text_for_ai)
 
@@ -247,14 +270,22 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         briefing_text = response.text
         print("Gemini analysis complete.")
         
-        # Parse Gemini's structured response
         briefing_data = parse_gemini_briefing(briefing_text, related_urls)
-        briefing_data['raw_ai_response'] = briefing_text # Store full response for debugging
+        briefing_data['raw_ai_response'] = briefing_text
         return briefing_data
 
     except Exception as e:
         print(f"Error generating content with Gemini: {e}")
-        return None
+        # If there's an error, return a minimal briefing to log the issue
+        return {
+            "title": f"AI Briefing Error - {date.today().strftime('%Y-%m-%d')}",
+            "summary_text": f"Error during AI analysis: {e}. Raw AI response might be incomplete or empty.",
+            "key_developments": [],
+            "strategic_implications": "Could not perform full analysis due to AI error.",
+            "suggested_reactions": "Monitor AI service status.",
+            "related_article_urls": related_urls,
+            "raw_ai_response": f"Error: {e}\nPrompt: {full_prompt}"
+        }
 
 def parse_gemini_briefing(briefing_text, related_urls):
     """Parses the structured text from Gemini into a dictionary."""
@@ -264,41 +295,34 @@ def parse_gemini_briefing(briefing_text, related_urls):
         "key_developments": [],
         "strategic_implications": "",
         "suggested_reactions": "",
-        "related_article_urls": related_urls # Use original fetched URLs
+        "related_article_urls": related_urls
     }
 
-    # Regex patterns to extract sections
     sections = {
         "Briefing Title": r"^\*\*Briefing Title:\*\* (.*?)$",
         "Executive Summary": r"^\*\*Executive Summary:\*\*\s*(.*?)(?=\n\n\*\*Key Developments\*\*|$)",
         "Key Developments": r"^\*\*Key Developments:\*\*\s*(.*?)(?=\n\n\*\*Strategic Implications\*\*|$)",
         "Strategic Implications for New Economy Canada": r"^\*\*Strategic Implications for New Economy Canada:\*\*\s*(.*?)(?=\n\n\*\*Suggested Reactions\*\*|$)",
         "Suggested Reactions": r"^\*\*Suggested Reactions:\*\*\s*(.*?)(?=\n\n\*\*Relevant Article URLs\*\*|$)",
-        # "Relevant Article URLs" will be handled separately as we pass the list directly
     }
 
-    # Extract title
     title_match = re.search(sections["Briefing Title"], briefing_text, re.MULTILINE)
     if title_match:
         parsed_data["title"] = title_match.group(1).strip()
     
-    # Extract executive summary
     summary_match = re.search(sections["Executive Summary"], briefing_text, re.DOTALL | re.MULTILINE)
     if summary_match:
         parsed_data["summary_text"] = summary_match.group(1).strip()
 
-    # Extract key developments
     dev_match = re.search(sections["Key Developments"], briefing_text, re.DOTALL | re.MULTILINE)
     if dev_match:
         dev_text = dev_match.group(1)
         parsed_data["key_developments"] = [item.strip() for item in re.findall(r'^- (.+)$', dev_text, re.MULTILINE)]
     
-    # Extract strategic implications
     imp_match = re.search(sections["Strategic Implications for New Economy Canada"], briefing_text, re.DOTALL | re.MULTILINE)
     if imp_match:
         parsed_data["strategic_implications"] = imp_match.group(1).strip()
 
-    # Extract suggested reactions
     react_match = re.search(sections["Suggested Reactions"], briefing_text, re.DOTALL | re.MULTILINE)
     if react_match:
         parsed_data["suggested_reactions"] = react_match.group(1).strip()
@@ -311,9 +335,8 @@ def store_briefing_in_supabase(briefing_data):
         print("No briefing data to store.")
         return "No briefing processed."
 
-    # Prepare data for insertion
     briefing_to_insert = {
-        "briefing_date": date.today().isoformat(), # Store as date type
+        "briefing_date": date.today().isoformat(),
         "title": briefing_data.get("title"),
         "summary_text": briefing_data.get("summary_text"),
         "key_developments": briefing_data.get("key_developments"),
@@ -324,10 +347,9 @@ def store_briefing_in_supabase(briefing_data):
     }
 
     try:
-        # Use upsert based on briefing_date to update existing daily briefing if run multiple times in a day
         response = supabase.table('daily_briefings').upsert(
             briefing_to_insert, 
-            on_conflict='briefing_date' # Assuming briefing_date is unique for daily updates
+            on_conflict='briefing_date'
         ).execute()
         
         print(f"Successfully stored/updated daily briefing in Supabase: {response.data}")
@@ -343,33 +365,24 @@ def handler(request):
     """
     print("Starting AI News Agent (with Brain)...")
     
-    # 1. Fetch articles from RSS feeds
     rss_articles = fetch_articles_from_rss()
-
-    # 2. Fetch articles from News API (supplementary)
     newsapi_articles = fetch_articles_from_newsapi() 
     
-    # 3. Combine all fetched articles and deduplicate
     all_fetched_articles = rss_articles + newsapi_articles
     
-    # 4. Store individual articles in the 'articles' table (for historical record/raw data)
     articles_stored_count = store_articles_in_supabase(all_fetched_articles)
     print(f"Stored {articles_stored_count} unique articles in 'articles' table.")
 
-    # 5. Analyze articles with Gemini to create the daily briefing
-    briefing_data = analyze_and_brief_with_gemini(all_fetched_articles)
+    # Only attempt AI analysis if the model was successfully initialized
+    if model:
+        briefing_data = analyze_and_brief_with_gemini(all_fetched_articles)
+        briefing_result = store_briefing_in_supabase(briefing_data)
+    else:
+        briefing_result = "Gemini model could not be initialized, skipping AI analysis."
+        print(briefing_result)
 
-    # 6. Store the AI-generated briefing in the 'daily_briefings' table
-    briefing_result = store_briefing_in_supabase(briefing_data)
-    
     print(f"Full run complete. Briefing storage status: {briefing_result}")
     return f"AI Agent run completed. Articles: {articles_stored_count}, Briefing: {briefing_result}"
 
-# For local testing (optional)
 if __name__ == "__main__":
-    # Ensure environment variables are set for local testing
-    # os.environ["NEWS_API_KEY"] = "YOUR_NEWS_API_KEY"
-    # os.environ["GEMINI_API_KEY"] = "YOUR_GEMINI_API_KEY"
-    # os.environ["SUPABASE_URL"] = "YOUR_SUPABASE_URL"
-    # os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "YOUR_SUPABASE_SERVICE_ROLE_KEY"
     print(handler(None))
