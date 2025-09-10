@@ -44,6 +44,10 @@ def get_gemini_model():
 
 model = get_gemini_model() # Initialize the model dynamically
 
+print(f"DEBUG: Found {len(available_models)} models.")
+for m in available_models:
+    print(f"DEBUG: Model '{m.name}' supports: {m.supported_generation_methods}")
+
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
