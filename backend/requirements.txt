@@ -1,4 +1,5 @@
 requests
 feedparser
 google-generativeai
-supabase # Changed from supabase-py
+supabase
+beautifulsoup4 # Add this line
