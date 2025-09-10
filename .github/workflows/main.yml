@@ -1,0 +1,45 @@
+name: Daily News Briefing
+
+on:
+  # Schedule the workflow to run daily
+  schedule:
+    - cron: '0 9 * * *' # Runs every day at 09:00 UTC (9 AM UTC)
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest # This means it will run on a virtual machine provided by GitHub
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4 # This step gets your code from the repository
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x' # Use the latest Python 3 version
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt # Installs requests, feedparser, google-generativeai
+
+      - name: Run News Aggregator Script
+        env: # This is how we pass your secret API keys to the script
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python app.py > briefing_output.html # Runs your script and saves output to an HTML file
+
+      - name: Upload Briefing Output (Optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-briefing
+          path: briefing_output.html
+        # This step is optional. It uploads the generated HTML as an "artifact"
+        # which you can download from the GitHub Actions run summary.
+        # This is a good way to check the output for now!
+
+      # For more advanced delivery (e.g., email), you'd add another step here
+      # that uses the generated briefing_output.html and a mail service.
