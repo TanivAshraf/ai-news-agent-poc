@@ -36,14 +36,18 @@ def _parse_date_string(date_string):
         '%Y-%m-%d', # Date only
     ]
 
-    # Try to clean up timezone names if present before parsing, or replace 'Z'
+    # Clean up timezone names if present before parsing, or replace 'Z' for better parsing
     cleaned_date_string = date_string.replace('Z', '+00:00').strip()
-    # Simple replacement for common TZ names if strptime doesn't handle them
     cleaned_date_string = re.sub(r' (UTC|GMT)$', ' +0000', cleaned_date_string, flags=re.IGNORECASE)
 
     for fmt in formats:
         try:
-            return datetime.strptime(cleaned_date_string, fmt)
+            dt_obj = datetime.strptime(cleaned_date_string, fmt)
+            # Ensure the datetime object has timezone info. If not, assume UTC.
+            if dt_obj.tzinfo is None:
+                # Naive datetime, assume UTC for consistency with Supabase timestamp with time zone
+                return dt_obj.replace(tzinfo=datetime.timezone.utc)
+            return dt_obj
         except ValueError:
             pass # Try next format
 
@@ -262,7 +266,17 @@ def store_articles_in_supabase(all_articles):
     for article in unique_articles:
         # Use our robust date parser here
         parsed_datetime = _parse_date_string(article['published_date'])
-        formatted_date = parsed_datetime.isoformat() + 'Z' if parsed_datetime != datetime.min else None
+        
+        # Format for Supabase: ISO 8601 with timezone offset (e.g., 2025-09-10T19:51:39+00:00)
+        # Check if the datetime object is timezone-aware before formatting
+        if parsed_datetime != datetime.min:
+            if parsed_datetime.tzinfo is None: # Naive datetime, assume UTC for Supabase
+                formatted_date = parsed_datetime.isoformat() + '+00:00'
+            else:
+                formatted_date = parsed_datetime.isoformat()
+        else:
+            formatted_date = None
+
 
         articles_to_insert.append({
             "source": article.get('source'),
@@ -300,7 +314,7 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
     # Sort articles by the robustly parsed date
     sorted_articles = sorted(
         articles_for_analysis, 
-        key=lambda x: _parse_date_string(x.get('published_date')), 
+        key=lambda x: _parse_date_string(x.get('published_date')), # Use the robust parser here
         reverse=True
     )
     
@@ -487,11 +501,13 @@ def handler(request):
     MAX_SCRAPINGBEE_CALLS = 5 # Limit ScrapingBee calls for free tier
 
     for i, article in enumerate(sorted_articles):
+        # We need to make a copy here to avoid modifying the list while iterating if needed later
+        article_copy = dict(article) 
         if i < MAX_SCRAPINGBEE_CALLS:
-            full_text = fetch_full_article_content(article['url'])
+            full_text = fetch_full_article_content(article_copy['url'])
             if full_text:
-                article['full_content'] = full_text
-        articles_with_full_content.append(article)
+                article_copy['full_content'] = full_text
+        articles_with_full_content.append(article_copy) # Append the potentially modified copy
 
     # 5. Store individual articles in the 'articles' table (for historical record/raw data)
     # Note: 'full_content' is NOT stored in Supabase 'articles' table based on current schema.
