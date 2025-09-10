@@ -14,7 +14,7 @@ NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY") # service_role key
-SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY") # New key
+SCRAPINGBEE_API_KEY = os.environ.get("SCRAPINGBEE_API_KEY")
 
 # --- Helper for Date Parsing ---
 def _parse_date_string(date_string):
@@ -53,7 +53,7 @@ def _parse_date_string(date_string):
 # --- Configure Google Gemini ---
 def get_gemini_model():
     """
-    Configures Google Gemini and finds a suitable model, prioritizing 'gemini-pro'.
+    Configures Google Gemini and finds a suitable model, prioritizing 'gemini-1.5-flash'.
     """
     if not GEMINI_API_KEY:
         print("GEMINI_API_KEY is not set. Cannot configure Gemini.")
@@ -68,23 +68,29 @@ def get_gemini_model():
         print(f"Error listing Gemini models: {e}. Check API key validity and network access.")
         return None
 
-    # Priority 1: Try 'models/gemini-pro'
+    # Priority 1: Try 'models/gemini-1.5-flash' for efficiency
+    for m in available_models:
+        if m.name == 'models/gemini-1.5-flash' and 'generateContent' in m.supported_generation_methods:
+            print("Found suitable Gemini model: models/gemini-1.5-flash (preferred).")
+            return genai.GenerativeModel('gemini-1.5-flash')
+            
+    # Priority 2: Fallback to 'models/gemini-pro' (older, but usually available)
     for m in available_models:
         if m.name == 'models/gemini-pro' and 'generateContent' in m.supported_generation_methods:
-            print("Found suitable Gemini model: models/gemini-pro (preferred).")
+            print("Found suitable Gemini model: models/gemini-pro (fallback).")
             return genai.GenerativeModel('gemini-pro')
-            
-    # Priority 2: Fallback to 'models/gemini-1.5-pro' if 'gemini-pro' isn't available or suitable
+
+    # Priority 3: Fallback to 'models/gemini-1.5-pro' if others aren't available or suitable
     for m in available_models:
         if m.name == 'models/gemini-1.5-pro' and 'generateContent' in m.supported_generation_methods:
-            print("Found suitable Gemini model: models/gemini-1.5-pro (fallback).")
+            print("Found suitable Gemini model: models/gemini-1.5-pro (general fallback).")
             return genai.GenerativeModel('gemini-1.5-pro')
 
-    # Priority 3: General fallback - find any model that supports generateContent
-    print("Neither 'gemini-pro' nor 'gemini-1.5-pro' explicitly found. Searching for any 'generateContent' supporting model.")
+    # Priority 4: General fallback - find ANY model that supports generateContent
+    print("No specific preferred models found. Searching for any 'generateContent' supporting model.")
     for m in available_models:
         if 'generateContent' in m.supported_generation_methods:
-            print(f"Found suitable Gemini model: {m.name} (general fallback).")
+            print(f"Found suitable Gemini model: {m.name} (any available).")
             return genai.GenerativeModel(m.name.split('/')[-1])
 
     print("No suitable Gemini model found that supports 'generateContent'. AI analysis will be skipped.")
@@ -139,7 +145,7 @@ def fetch_articles_from_rss():
                         "description": summary,
                         "published_date": entry.published if hasattr(entry, 'published') else 'N/A',
                         "keywords_matched": matched_keywords,
-                        "full_content": None # Initialize full_content as None
+                        "full_content": None
                     })
         except Exception as e:
             print(f"Error fetching RSS for {feed_info['name']} ({feed_info['url']}): {e}")
@@ -187,7 +193,7 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
                         "description": description,
                         "published_date": article.get('publishedAt', 'N/A'),
                         "keywords_matched": matched_keywords,
-                        "full_content": None # Initialize full_content as None
+                        "full_content": None
                     })
                 print(f"Found {len(formatted_articles)} articles from News API.")
             return formatted_articles
@@ -212,20 +218,14 @@ def fetch_full_article_content(url):
     params = {
         "api_key": SCRAPINGBEE_API_KEY,
         "url": url,
-        # Removed problematic parameters for PoC robustness
-        # "premium_proxy": "true",
-        # "block_resources": "false",
-        # "wait_for_selector": "body",
     }
 
     try:
         response = requests.get(scrapingbee_url, params=params, timeout=30)
-        response.raise_for_status() # Raise an exception for HTTP errors
+        response.raise_for_status()
         
-        # Parse HTML with BeautifulSoup
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Attempt to find the main content. This is heuristic and may need refinement
         main_content = soup.find('article') or soup.find('main') or soup.find(class_=re.compile("body|content|article", re.I))
         
         if main_content:
@@ -240,7 +240,6 @@ def fetch_full_article_content(url):
 
     except requests.exceptions.RequestException as e:
         print(f"Error fetching full content for {url[:50]}... with ScrapingBee: {e}")
-        # Log the full response text if there's a client error to debug ScrapingBee's specific issue
         if response is not None:
             print(f"ScrapingBee response text: {response.text[:500]}...")
         return None
@@ -267,7 +266,6 @@ def store_articles_in_supabase(all_articles):
                 formatted_date = parsed_datetime.isoformat()
         else:
             formatted_date = None
-
 
         articles_to_insert.append({
             "source": article.get('source'),
@@ -308,7 +306,7 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         reverse=True
     )
     
-    MAX_ARTICLES_FOR_DEEP_ANALYSIS = 5 
+    MAX_ARTICLES_FOR_DEEP_ANALYSIS = 3 # Reduced for free tier efficiency
     articles_for_gemini_input = []
     related_urls_for_briefing = []
 
@@ -484,16 +482,19 @@ def handler(request):
     )
     
     articles_with_full_content = []
-    MAX_SCRAPINGBEE_CALLS = 5 # Limit ScrapingBee calls for free tier
+    MAX_SCRAPINGBEE_CALLS = 3 # Reduced for free tier efficiency
+    MAX_ARTICLES_FOR_GEMINI = 3 # Limit for Gemini processing
 
     for i, article in enumerate(sorted_articles):
-        # We need to make a copy here to avoid modifying the list while iterating if needed later
-        article_copy = dict(article) 
+        article_copy = dict(article) # Create a copy to avoid modifying the original list item
         if i < MAX_SCRAPINGBEE_CALLS:
             full_text = fetch_full_article_content(article_copy['url'])
             if full_text:
                 article_copy['full_content'] = full_text
-        articles_with_full_content.append(article_copy) # Append the potentially modified copy
+        articles_with_full_content.append(article_copy)
+
+    # Filter articles down to MAX_ARTICLES_FOR_GEMINI for AI input to manage token count
+    articles_for_gemini_analysis = articles_with_full_content[:MAX_ARTICLES_FOR_GEMINI]
 
     # 5. Store individual articles in the 'articles' table (for historical record/raw data)
     # Note: 'full_content' is NOT stored in Supabase 'articles' table based on current schema.
@@ -503,7 +504,7 @@ def handler(request):
 
     # 6. Analyze articles with Gemini to create the daily briefing
     if model:
-        briefing_data = analyze_and_brief_with_gemini(articles_with_full_content) # Pass articles with full content
+        briefing_data = analyze_and_brief_with_gemini(articles_for_gemini_analysis) # Pass the limited list
         briefing_result = store_briefing_in_supabase(briefing_data)
     else:
         error_briefing = {
