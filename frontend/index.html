@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI News Aggregator</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Supabase JS Client Library -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <header>
+        <h1>AI News Aggregator</h1>
+        <p>Your custom daily briefing on clean economy in Canada.</p>
+        <div class="filter-options">
+            <label for="sortOrder">Sort by:</label>
+            <select id="sortOrder">
+                <option value="published_date_desc">Newest First</option>
+                <option value="published_date_asc">Oldest First</option>
+                <option value="source_asc">Source (A-Z)</option>
+            </select>
+        </div>
+    </header>
+    <main id="news-container">
+        <p>Loading news...</p>
+        <!-- News articles will be loaded here by JavaScript -->
+    </main>
+    <footer>
+        <p>&copy; 2025 AI News Aggregator. Data powered by News API and Supabase.</p>
+    </footer>
+    <script src="script.js"></script>
+</body>
+</html>
