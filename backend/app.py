@@ -29,7 +29,6 @@ def _parse_date_string(date_string):
         '%Y-%m-%dT%H:%M:%SZ',
         '%Y-%m-%dT%H:%M:%S%z',
         '%a, %d %b %Y %H:%M:%S %z',
-        '%a, %d %b %Y %H:%M:%S %Z',
         '%a, %d %b %Y %H:%M:%S',
         '%Y-%m-%d %H:%M:%S',
         '%Y-%m-%d',
@@ -113,13 +112,21 @@ RSS_FEEDS = [
 ]
 
 # --- Keywords for Filtering (Case-insensitive) ---
+# COMBINED TOPIC AND GEOGRAPHICAL KEYWORDS FOR STRICTER CANADIAN FILTERING
 KEYWORDS = [
     "Energy", "clean energy", "clean economy", "mining", "critical minerals", "EV’s",
     "electric vehicles", "battery supply chain", "electrification", "generation",
     "transmission", "battery storage", "cement", "steel", "emissions", "decarbonization",
     "industrial strategy", "clean tech", "nuclear", "wind energy", "solar", "renewables",
     "natural gas", "oil and gas", "hydrogen", "investment tax credits", "clean tax credits",
-    "EV rebates"
+    "EV rebates",
+    # --- CANADIAN GEOGRAPHICAL KEYWORDS ADDED BELOW ---
+    "Canada", "Canadian", "Ontario", "Quebec", "British Columbia", "Alberta", "Manitoba",
+    "Saskatchewan", "Nova Scotia", "New Brunswick", "Prince Edward Island", "Newfoundland",
+    "Labrador", "Yukon", "Northwest Territories", "Nunavut",
+    "Toronto", "Vancouver", "Montreal", "Calgary", "Edmonton", "Ottawa", "Winnipeg",
+    "Quebec City", "Halifax", "Victoria", "Regina", "Saskatoon", "Fredericton",
+    "Charlottetown", "St. John's", "Whitehorse", "Yellowknife", "Iqaluit"
 ]
 KEYWORD_PATTERN = re.compile(r'\b(?:' + '|'.join(re.escape(k) for k in KEYWORDS) + r')\b', re.IGNORECASE)
 
@@ -135,6 +142,7 @@ def fetch_articles_from_rss():
                 link = entry.link if hasattr(entry, 'link') else '#'
                 summary = entry.summary if hasattr(entry, 'summary') else (entry.description if hasattr(entry, 'description') else 'No summary available.')
                 
+                # Filter using the combined KEYWORDS (including geographical)
                 matched_keywords = [k for k in KEYWORDS if re.search(r'\b' + re.escape(k) + r'\b', title + ' ' + summary, re.IGNORECASE)]
 
                 if matched_keywords:
@@ -152,8 +160,11 @@ def fetch_articles_from_rss():
     print(f"Found {len(all_articles)} articles from RSS feeds after initial keyword filter.")
     return all_articles
 
-def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, language="en", max_articles=10):
-    """Fetches articles from News API for a given query (as a supplementary source)."""
+def fetch_articles_from_newsapi(query="", days_back=1, language="en", max_articles=10): # query="" - adjusted
+    """
+    Fetches articles from News API for a given query (as a supplementary source).
+    Relies on KEYWORDS for filtering.
+    """
     if not NEWS_API_KEY:
         print("NEWS_API_KEY is not set, skipping News API fetch.")
         return []
@@ -161,7 +172,8 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days_back)
 
-    newsapi_query = f"({query}) AND ({' OR '.join(KEYWORDS)})"
+    # News API query now directly uses the comprehensive KEYWORDS list
+    newsapi_query = ' OR '.join(KEYWORDS)
 
     url = f"https://newsapi.org/v2/everything"
     params = {
@@ -175,7 +187,7 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
     }
     
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
         if data['status'] == 'ok':
@@ -183,6 +195,7 @@ def fetch_articles_from_newsapi(query="Canada clean energy", days_back=1, langua
             for article in data['articles']:
                 title = article.get('title', 'No Title')
                 description = article.get('description', 'No description available.')
+                # Filter using the combined KEYWORDS (including geographical)
                 matched_keywords = [k for k in KEYWORDS if re.search(r'\b' + re.escape(k) + r'\b', title + ' ' + description, re.IGNORECASE)]
 
                 if matched_keywords:
@@ -327,7 +340,7 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         articles_for_gemini_input.append(f"--- Article {i+1} ---\n{article_input_text}\n")
         related_urls_for_briefing.append(url)
 
-    current_date_str = date.today().strftime('%B %d, %Y') # e.g., "September 10, 2025"
+    current_date_str = date.today().strftime('%B %d, %Y')
 
     persona = (
         "You are a senior political analyst for 'New Economy Canada'. "
@@ -389,10 +402,10 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
         }
 
 def parse_gemini_briefing(briefing_text, related_urls):
-    current_date_str = date.today().strftime('%B %d, %Y') # For comparison
+    current_date_str = date.today().strftime('%B %d, %Y')
 
     parsed_data = {
-        "title": f"AI Morning Briefing - {date.today().strftime('%Y-%m-%d')}", # Default with current date
+        "title": f"AI Morning Briefing - {current_date_str}", # Default with current date
         "summary_text": "",
         "key_developments": [],
         "strategic_implications": "",
@@ -411,8 +424,9 @@ def parse_gemini_briefing(briefing_text, related_urls):
     title_match = re.search(sections["Briefing Title"], briefing_text, re.MULTILINE)
     if title_match:
         extracted_title = title_match.group(1).strip()
-        # If Gemini uses its own date or placeholder, enforce current date
-        if "Today's Date" in extracted_title or "October 26, 2023" in extracted_title or "2025-09-10" in extracted_title:
+        # If Gemini provides a title with a different date, enforce current date
+        # Check for common date patterns or placeholders Gemini might insert
+        if re.search(r'\d{4}-\d{2}-\d{2}', extracted_title) or "Today's Date" in extracted_title or "October 26, 2023" in extracted_title:
             parsed_data["title"] = f"AI Morning Briefing - {current_date_str}"
         else:
             parsed_data["title"] = extracted_title
@@ -485,34 +499,31 @@ def handler(request):
     # Sort them by date to get the most recent for full content.
     sorted_articles = sorted(
         all_fetched_articles,
-        key=lambda x: _parse_date_string(x.get('published_date')), # Use the robust parser here
+        key=lambda x: _parse_date_string(x.get('published_date')),
         reverse=True
     )
     
     articles_with_full_content = []
-    MAX_SCRAPINGBEE_CALLS = 3 # Reduced for free tier efficiency
-    MAX_ARTICLES_FOR_GEMINI = 3 # Limit for Gemini processing
+    MAX_SCRAPINGBEE_CALLS = 3 
+    MAX_ARTICLES_FOR_GEMINI = 3
 
     for i, article in enumerate(sorted_articles):
-        article_copy = dict(article) # Create a copy to avoid modifying the original list item
+        article_copy = dict(article)
         if i < MAX_SCRAPINGBEE_CALLS:
             full_text = fetch_full_article_content(article_copy['url'])
             if full_text:
                 article_copy['full_content'] = full_text
         articles_with_full_content.append(article_copy)
 
-    # Filter articles down to MAX_ARTICLES_FOR_GEMINI for AI input to manage token count
     articles_for_gemini_analysis = articles_with_full_content[:MAX_ARTICLES_FOR_GEMINI]
 
     # 5. Store individual articles in the 'articles' table (for historical record/raw data)
-    # Note: 'full_content' is NOT stored in Supabase 'articles' table based on current schema.
-    # We pass it to Gemini, but don't store to avoid hitting text limits/complexity in SQL for PoC.
     articles_stored_count = store_articles_in_supabase(all_fetched_articles) 
     print(f"Stored {articles_stored_count} unique articles in 'articles' table.")
 
     # 6. Analyze articles with Gemini to create the daily briefing
     if model:
-        briefing_data = analyze_and_brief_with_gemini(articles_for_gemini_analysis) # Pass the limited list
+        briefing_data = analyze_and_brief_with_gemini(articles_for_gemini_analysis)
         briefing_result = store_briefing_in_supabase(briefing_data)
     else:
         error_briefing = {
