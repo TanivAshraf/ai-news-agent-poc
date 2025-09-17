@@ -100,33 +100,10 @@ model = get_gemini_model() # Initialize the model dynamically
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- Specific RSS Feeds for your PoC Sources ---
-RSS_FEEDS = [
-    {"name": "Globe and Mail - Business", "url": "https://www.theglobeandmail.com/business/feed/"},
-    {"name": "Toronto Star - Business", "url": "https://www.thestar.com/business/feed/"},
-    {"name": "National Observer", "url": "https://www.nationalobserver.com/rss"},
-    {"name": "Financial Post", "url": "https://financialpost.com/feed/"},
-    {"name": "Ontario Newsroom", "url": "https://news.ontario.ca/en/feed"},
-    {"name": "The Hub", "url": "https://thehub.ca/feed/"},
-    {"name": "The Logic", "url": "https://thelogic.co/feed/"},
-]
-
 # --- Keywords for Filtering (Case-insensitive) ---
-# COMBINED TOPIC AND GEOGRAPHICAL KEYWORDS FOR STRICTER CANADIAN FILTERING
+# TEMPORARILY SIMPLIFIED KEYWORDS FOR DEBUGGING "0 articles found" ISSUE
 KEYWORDS = [
-    "Energy", "clean energy", "clean economy", "mining", "critical minerals", "EV’s",
-    "electric vehicles", "battery supply chain", "electrification", "generation",
-    "transmission", "battery storage", "cement", "steel", "emissions", "decarbonization",
-    "industrial strategy", "clean tech", "nuclear", "wind energy", "solar", "renewables",
-    "natural gas", "oil and gas", "hydrogen", "investment tax credits", "clean tax credits",
-    "EV rebates",
-    # --- CANADIAN GEOGRAPHICAL KEYWORDS ADDED BELOW ---
-    "Canada", "Canadian", "Ontario", "Quebec", "British Columbia", "Alberta", "Manitoba",
-    "Saskatchewan", "Nova Scotia", "New Brunswick", "Prince Edward Island", "Newfoundland",
-    "Labrador", "Yukon", "Northwest Territories", "Nunavut",
-    "Toronto", "Vancouver", "Montreal", "Calgary", "Edmonton", "Ottawa", "Winnipeg",
-    "Quebec City", "Halifax", "Victoria", "Regina", "Saskatoon", "Fredericton",
-    "Charlottetown", "St. John's", "Whitehorse", "Yellowknife", "Iqaluit"
+    "Canada", "Canadian", "Energy", "clean energy", "economy", "Ontario", "Alberta", "Quebec", "Toronto", "Vancouver"
 ]
 KEYWORD_PATTERN = re.compile(r'\b(?:' + '|'.join(re.escape(k) for k in KEYWORDS) + r')\b', re.IGNORECASE)
 
@@ -134,6 +111,15 @@ def fetch_articles_from_rss():
     """Fetches articles from the configured RSS feeds."""
     all_articles = []
     print("Fetching articles from RSS feeds...")
+    RSS_FEEDS = [
+        {"name": "Globe and Mail - Business", "url": "https://www.theglobeandmail.com/business/feed/"},
+        {"name": "Toronto Star - Business", "url": "https://www.thestar.com/business/feed/"},
+        {"name": "National Observer", "url": "https://www.nationalobserver.com/rss"},
+        {"name": "Financial Post", "url": "https://financialpost.com/feed/"},
+        {"name": "Ontario Newsroom", "url": "https://news.ontario.ca/en/feed"},
+        {"name": "The Hub", "url": "https://thehub.ca/feed/"},
+        {"name": "The Logic", "url": "https://thelogic.co/feed/"},
+    ]
     for feed_info in RSS_FEEDS:
         try:
             feed = feedparser.parse(feed_info["url"])
@@ -142,7 +128,6 @@ def fetch_articles_from_rss():
                 link = entry.link if hasattr(entry, 'link') else '#'
                 summary = entry.summary if hasattr(entry, 'summary') else (entry.description if hasattr(entry, 'description') else 'No summary available.')
                 
-                # Filter using the combined KEYWORDS (including geographical)
                 matched_keywords = [k for k in KEYWORDS if re.search(r'\b' + re.escape(k) + r'\b', title + ' ' + summary, re.IGNORECASE)]
 
                 if matched_keywords:
@@ -160,10 +145,10 @@ def fetch_articles_from_rss():
     print(f"Found {len(all_articles)} articles from RSS feeds after initial keyword filter.")
     return all_articles
 
-def fetch_articles_from_newsapi(query="", days_back=1, language="en", max_articles=10): # query="" - adjusted
+def fetch_articles_from_newsapi(query="", days_back=1, language="en", max_articles=10):
     """
     Fetches articles from News API for a given query (as a supplementary source).
-    Relies on KEYWORDS for filtering.
+    Uses simplified query for debugging.
     """
     if not NEWS_API_KEY:
         print("NEWS_API_KEY is not set, skipping News API fetch.")
@@ -172,8 +157,8 @@ def fetch_articles_from_newsapi(query="", days_back=1, language="en", max_articl
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days_back)
 
-    # News API query now directly uses the comprehensive KEYWORDS list
-    newsapi_query = ' OR '.join(KEYWORDS)
+    # TEMPORARILY SIMPLIFIED NEWSAPI QUERY FOR DEBUGGING
+    newsapi_query = "Canada AND (clean energy OR energy OR economy)" 
 
     url = f"https://newsapi.org/v2/everything"
     params = {
@@ -326,10 +311,12 @@ def analyze_and_brief_with_gemini(articles_for_analysis):
     print(f"Preparing input for Gemini from top {MAX_ARTICLES_FOR_DEEP_ANALYSIS} articles (using full content if available).")
 
     for i, article in enumerate(sorted_articles):
-        title = article.get('title', 'No Title')
-        url = article.get('url', '#')
-        description = article.get('description', 'No description available.')
-        full_content = article.get('full_content')
+        article_copy = dict(article)
+        
+        title = article_copy.get('title', 'No Title')
+        url = article_copy.get('url', '#')
+        description = article_copy.get('description', 'No description available.')
+        full_content = article_copy.get('full_content')
 
         article_input_text = ""
         if i < MAX_ARTICLES_FOR_DEEP_ANALYSIS and full_content:
@@ -405,7 +392,7 @@ def parse_gemini_briefing(briefing_text, related_urls):
     current_date_str = date.today().strftime('%B %d, %Y')
 
     parsed_data = {
-        "title": f"AI Morning Briefing - {current_date_str}", # Default with current date
+        "title": f"AI Morning Briefing - {current_date_str}",
         "summary_text": "",
         "key_developments": [],
         "strategic_implications": "",
@@ -424,8 +411,6 @@ def parse_gemini_briefing(briefing_text, related_urls):
     title_match = re.search(sections["Briefing Title"], briefing_text, re.MULTILINE)
     if title_match:
         extracted_title = title_match.group(1).strip()
-        # If Gemini provides a title with a different date, enforce current date
-        # Check for common date patterns or placeholders Gemini might insert
         if re.search(r'\d{4}-\d{2}-\d{2}', extracted_title) or "Today's Date" in extracted_title or "October 26, 2023" in extracted_title:
             parsed_data["title"] = f"AI Morning Briefing - {current_date_str}"
         else:
@@ -508,7 +493,7 @@ def handler(request):
     MAX_ARTICLES_FOR_GEMINI = 3
 
     for i, article in enumerate(sorted_articles):
-        article_copy = dict(article)
+        article_copy = dict(article) 
         if i < MAX_SCRAPINGBEE_CALLS:
             full_text = fetch_full_article_content(article_copy['url'])
             if full_text:
