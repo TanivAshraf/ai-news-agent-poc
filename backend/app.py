@@ -115,7 +115,7 @@ def fetch_articles_from_rss():
         {"name": "Globe and Mail - Business", "url": "https://www.theglobeandmail.com/business/feed/"},
         {"name": "Toronto Star - Business", "url": "https://www.thestar.com/business/feed/"},
         {"name": "National Observer", "url": "https://www.nationalobserver.com/rss"},
-        {"name": "Financial Post", "url": "https://financialpost.com/feed/"},
+        # --- {"name": "Financial Post", "url": "https://financialpost.com/feed/"}, ---
         {"name": "Ontario Newsroom", "url": "https://news.ontario.ca/en/feed"},
         {"name": "The Hub", "url": "https://thehub.ca/feed/"},
         {"name": "The Logic", "url": "https://thelogic.co/feed/"},
